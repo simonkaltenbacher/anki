@@ -702,6 +702,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_notetypes_includes_sort_field_ordinal() {
+        let fixture = crate::service::common::TestStore::new("notetypes-get-sort-ordinal");
+        let store = fixture.store();
+        let api = NotetypesApi::new(store.clone());
+        let notetype_id = store
+            .list_notetype_ids()
+            .expect("notetype ids")
+            .into_iter()
+            .next()
+            .expect("at least one notetype");
+        let backend_notetype = store.get_notetype(notetype_id).expect("notetype");
+        let expected = backend_notetype
+            .config
+            .as_ref()
+            .map(|config| config.sort_field_idx);
+
+        let response = <NotetypesApi as NotetypesService>::get_notetypes(
+            &api,
+            Request::new(GetNotetypesRequest {
+                notetype_ids: vec![notetype_id],
+            }),
+        )
+        .await
+        .expect("get notetypes")
+        .into_inner();
+
+        assert_eq!(response.notetypes.len(), 1);
+        assert_eq!(response.notetypes[0].sort_field_ordinal, expected);
+    }
+
+    #[tokio::test]
     async fn list_notetype_refs_returns_ids_and_names() {
         let fixture = crate::service::common::TestStore::new("notetype-refs-shape");
         let store = fixture.store();

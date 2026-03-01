@@ -111,6 +111,7 @@ pub fn map_notetype(notetype: &BackendNotetype) -> ApiNotetype {
             .collect(),
         modified_at: Some(common::timestamp_from_secs(notetype.mtime_secs)),
         usn: i64::from(notetype.usn),
+        sort_field_ordinal: notetype.config.as_ref().map(|config| config.sort_field_idx),
     }
 }
 
@@ -238,5 +239,20 @@ mod tests {
             "unexpected message: {}",
             err.message()
         );
+    }
+
+    #[test]
+    fn map_notetype_includes_sort_field_ordinal() {
+        let notetype = Notetype {
+            id: 42,
+            config: Some(anki_proto::notetypes::notetype::Config {
+                sort_field_idx: 1,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let mapped = map_notetype(&notetype);
+        assert_eq!(mapped.sort_field_ordinal, Some(1));
     }
 }

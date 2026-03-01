@@ -66,6 +66,8 @@ message Notetype {
   repeated NotetypeTemplate templates = 5;
   google.protobuf.Timestamp modified_at = 6;
   int64 usn = 7;
+  // 0-based ordinal of the configured sort field. Unset when unavailable.
+  optional uint32 sort_field_ordinal = 8;
 }
 
 message ListNotetypesRequest {}
