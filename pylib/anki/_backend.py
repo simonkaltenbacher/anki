@@ -170,6 +170,29 @@ class RustBackend(RustBackendGenerated):
         err.ParseFromString(error_bytes)
         raise backend_exception_to_pylib(err)
 
+    def start_api_server(
+        self,
+        host: str | None = None,
+        port: int | None = None,
+        api_key: str | None = None,
+        anki_version: str | None = None,
+        auth_disabled: bool | None = None,
+        allow_non_local: bool | None = None,
+        allow_loopback_unauthenticated_health_check: bool | None = None,
+    ) -> None:
+        self._backend.start_api_server(
+            host=host,
+            port=port,
+            api_key=api_key,
+            anki_version=anki_version,
+            auth_disabled=auth_disabled,
+            allow_non_local=allow_non_local,
+            allow_loopback_unauthenticated_health_check=allow_loopback_unauthenticated_health_check,
+        )
+
+    def stop_api_server(self) -> None:
+        self._backend.stop_api_server()
+
 
 class Translations(GeneratedTranslations):
     def __init__(self, backend: ref[RustBackend] | None):

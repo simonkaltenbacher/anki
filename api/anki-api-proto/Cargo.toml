@@ -1,0 +1,19 @@
+[package]
+name = "anki-api-proto"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+rust-version.workspace = true
+description = "Public gRPC protobuf contract for Anki API v1"
+
+[dependencies]
+prost = "0.14"
+prost-types = "0.14"
+tonic.workspace = true
+tonic-prost.workspace = true
+
+[build-dependencies]
+tonic-build.workspace = true
+tonic-prost-build.workspace = true

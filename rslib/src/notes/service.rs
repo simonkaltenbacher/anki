@@ -11,6 +11,7 @@ use crate::notes::AddNoteRequest;
 use crate::notes::Note;
 use crate::notes::NoteId;
 use crate::prelude::IntoNewtypeVec;
+use crate::types::Usn;
 
 pub(crate) fn to_i64s(ids: Vec<NoteId>) -> Vec<i64> {
     ids.into_iter().map(Into::into).collect()
@@ -181,6 +182,33 @@ impl crate::services::NotesService for Collection {
     ) -> error::Result<anki_proto::notetypes::NotetypeId> {
         self.get_single_notetype_of_notes(&input.note_ids.into_newtype(NoteId))
             .map(Into::into)
+    }
+
+    // anki-api extension: paged note change feed for external API consumers.
+    fn get_note_changes_page(
+        &mut self,
+        input: anki_proto::notes::GetNoteChangesPageRequest,
+    ) -> error::Result<anki_proto::notes::GetNoteChangesPageResponse> {
+        let after_usn = if input.after_usn < i64::from(i32::MIN) {
+            i32::MIN
+        } else if input.after_usn > i64::from(i32::MAX) {
+            i32::MAX
+        } else {
+            input.after_usn as i32
+        };
+        let entries = self
+            .storage
+            .get_note_changes_page(Usn(after_usn), NoteId(input.after_id), input.limit)?
+            .into_iter()
+            .map(
+                |(note_id, usn, mtime_secs)| anki_proto::notes::NoteChangeEntry {
+                    note_id: note_id.0,
+                    usn: usn.0,
+                    mtime_secs: mtime_secs.0,
+                },
+            )
+            .collect();
+        Ok(anki_proto::notes::GetNoteChangesPageResponse { entries })
     }
 }
 

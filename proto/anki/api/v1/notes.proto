@@ -1,0 +1,157 @@
+syntax = "proto3";
+
+package anki.api.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Note read/write and change-feed APIs.
+service NotesService {
+  rpc GetNote(GetNoteRequest) returns (GetNoteResponse);
+  // Gets multiple notes by ID, in request order.
+  rpc GetNotes(GetNotesRequest) returns (GetNotesResponse);
+  // Streams lightweight note references (id + sort field), optionally filtered.
+  rpc ListNoteRefs(ListNoteRefsRequest) returns (stream ListNoteRefsResponse);
+  // Streams note payloads, optionally filtered by a backend search query.
+  rpc ListNotes(ListNotesRequest) returns (stream ListNotesResponse);
+  // Updates one or more named fields for one note.
+  // Server resolves names to notetype ordinals and merges into current values.
+  // If `expected_usn` is set and stale, returns `ABORTED` with
+  // `ErrorDetail.code=VERSION_CONFLICT`.
+  rpc UpdateNoteFields(UpdateNoteFieldsRequest) returns (UpdateNoteFieldsResponse);
+  // Batch updates are not atomic. Updates are applied in request order and
+  // processing stops on the first error. Earlier successful updates are not
+  // rolled back. `results.len()` indicates successful prefix length.
+  rpc UpdateNoteFieldsBatch(UpdateNoteFieldsBatchRequest) returns (UpdateNoteFieldsBatchResponse);
+  // Returns paged changes ordered by `(usn, note_id)`.
+  // Cursor format: `"<usn>:<note_id>"`. Empty cursor starts from beginning.
+  rpc GetNoteChanges(GetNoteChangesRequest) returns (GetNoteChangesResponse);
+  // Returns the total number of notes matching a query.
+  rpc CountNotes(CountNotesRequest) returns (CountNotesResponse);
+}
+
+message SortField {
+  uint32 ordinal = 1;
+  string name = 2;
+  string value = 3;
+}
+
+message NoteFieldUpdate {
+  string name = 1;
+  string value = 2;
+}
+
+message Note {
+  int64 note_id = 1;
+  int64 notetype_id = 2;
+  // Named field values in notetype ordinal order.
+  repeated NoteFieldUpdate fields = 3;
+  repeated string tags = 4;
+  SortField sort_field = 5;
+  google.protobuf.Timestamp modified_at = 6;
+  int64 usn = 7;
+}
+
+message GetNoteRequest {
+  int64 note_id = 1;
+}
+
+message GetNoteResponse {
+  Note note = 1;
+}
+
+message GetNotesRequest {
+  repeated int64 note_ids = 1;
+}
+
+message GetNotesResponse {
+  repeated Note notes = 1;
+}
+
+message ListNoteRefsRequest {
+  // Backend search query (Anki search syntax).
+  // Empty means "all notes".
+  string query = 1;
+  // Skip first N results. 0 = start from beginning.
+  uint64 offset = 2;
+  // Max results to stream. 0 = unlimited.
+  uint64 limit = 3;
+}
+
+message NoteRef {
+  int64 note_id = 1;
+  SortField sort_field = 2;
+}
+
+message ListNoteRefsResponse {
+  NoteRef note_ref = 1;
+}
+
+message ListNotesRequest {
+  // Backend search query (Anki search syntax).
+  // Empty means "all notes".
+  string query = 1;
+  // Skip first N results. 0 = start from beginning.
+  uint64 offset = 2;
+  // Max results to stream. 0 = unlimited.
+  uint64 limit = 3;
+}
+
+message ListNotesResponse {
+  Note note = 1;
+}
+
+message UpdateNoteFieldsRequest {
+  int64 note_id = 1;
+  // Only changed fields, matched by name against the notetype.
+  repeated NoteFieldUpdate fields = 2;
+  // Optional optimistic concurrency precondition.
+  optional int64 expected_usn = 3;
+}
+
+message UpdateNoteFieldsResponse {
+  Note note = 1;
+}
+
+message UpdateNoteFieldsBatchRequest {
+  repeated UpdateNoteFieldsRequest updates = 1;
+}
+
+message NoteWriteMetadata {
+  int64 note_id = 1;
+  int64 usn = 2;
+  SortField sort_field = 3;
+}
+
+message UpdateNoteFieldsBatchResponse {
+  // Successful per-note write metadata in request order, for successful prefix.
+  repeated NoteWriteMetadata results = 1;
+}
+
+message GetNoteChangesRequest {
+  // Cursor format: `"<usn>:<note_id>"`. Empty means from beginning.
+  string cursor = 1;
+  // Page size hint. Server applies defaults and upper bounds.
+  uint32 limit = 2;
+}
+
+message NoteChange {
+  int64 note_id = 1;
+  google.protobuf.Timestamp modified_at = 2;
+  int64 usn = 3;
+}
+
+message GetNoteChangesResponse {
+  repeated NoteChange changes = 1;
+  // Empty when there are no additional pages.
+  string next_cursor = 2;
+}
+
+message CountNotesRequest {
+  // Backend search query (Anki search syntax).
+  // Empty means "all notes".
+  string query = 1;
+}
+
+message CountNotesResponse {
+  uint64 count = 1;
+}

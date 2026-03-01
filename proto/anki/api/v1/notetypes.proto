@@ -1,0 +1,183 @@
+syntax = "proto3";
+
+package anki.api.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Notetype read/write and change-feed APIs.
+service NotetypesService {
+  rpc ListNotetypeRefs(ListNotetypeRefsRequest) returns (ListNotetypeRefsResponse);
+  rpc ListNotetypes(ListNotetypesRequest) returns (ListNotetypesResponse);
+  rpc GetNotetype(GetNotetypeRequest) returns (GetNotetypeResponse);
+  // Gets multiple notetypes by ID, in request order.
+  rpc GetNotetypes(GetNotetypesRequest) returns (GetNotetypesResponse);
+  rpc GetNotetypeIdByName(GetNotetypeIdByNameRequest) returns (GetNotetypeIdByNameResponse);
+  // Atomically updates templates and CSS for one notetype.
+  // If `expected_usn` is set and stale, returns `ABORTED` with
+  // `ErrorDetail.code=VERSION_CONFLICT`.
+  rpc UpdateNotetypeContent(UpdateNotetypeContentRequest) returns (UpdateNotetypeContentResponse);
+  // Updates templates only.
+  rpc UpdateTemplates(UpdateTemplatesRequest) returns (UpdateTemplatesResponse);
+  // Batch updates are not atomic. Updates are applied in request order and
+  // processing stops on the first error. Earlier successful updates are not
+  // rolled back. `results.len()` indicates successful prefix length.
+  rpc UpdateTemplatesBatch(UpdateTemplatesBatchRequest) returns (UpdateTemplatesBatchResponse);
+  // Updates CSS only.
+  rpc UpdateCss(UpdateCssRequest) returns (UpdateCssResponse);
+  // Batch updates are not atomic. Updates are applied in request order and
+  // processing stops on the first error. Earlier successful updates are not
+  // rolled back. `results.len()` indicates successful prefix length.
+  rpc UpdateCssBatch(UpdateCssBatchRequest) returns (UpdateCssBatchResponse);
+  // Returns paged changes ordered by `(usn, notetype_id)`.
+  // Cursor format: `"<usn>:<notetype_id>"`. Empty cursor starts from beginning.
+  rpc GetNotetypeChanges(GetNotetypeChangesRequest) returns (GetNotetypeChangesResponse);
+  // Returns the total number of notetypes.
+  rpc CountNotetypes(CountNotetypesRequest) returns (CountNotetypesResponse);
+}
+
+message ListNotetypeRefsRequest {}
+
+message NotetypeRef {
+  int64 notetype_id = 1;
+  string name = 2;
+}
+
+message ListNotetypeRefsResponse {
+  repeated NotetypeRef notetypes = 1;
+}
+
+message NotetypeField {
+  uint32 ordinal = 1;
+  string name = 2;
+}
+
+message NotetypeTemplate {
+  uint32 ordinal = 1;
+  string name = 2;
+  string front = 3;
+  string back = 4;
+}
+
+message Notetype {
+  int64 notetype_id = 1;
+  string name = 2;
+  string css = 3;
+  repeated NotetypeField fields = 4;
+  repeated NotetypeTemplate templates = 5;
+  google.protobuf.Timestamp modified_at = 6;
+  int64 usn = 7;
+}
+
+message ListNotetypesRequest {}
+
+message ListNotetypesResponse {
+  repeated Notetype notetypes = 1;
+}
+
+message GetNotetypeRequest {
+  int64 notetype_id = 1;
+}
+
+message GetNotetypeResponse {
+  Notetype notetype = 1;
+}
+
+message GetNotetypesRequest {
+  repeated int64 notetype_ids = 1;
+}
+
+message GetNotetypesResponse {
+  repeated Notetype notetypes = 1;
+}
+
+message GetNotetypeIdByNameRequest {
+  string name = 1;
+}
+
+message GetNotetypeIdByNameResponse {
+  int64 notetype_id = 1;
+}
+
+message UpdateNotetypeContentRequest {
+  int64 notetype_id = 1;
+  // Updated template definitions, matched by `ordinal`.
+  repeated NotetypeTemplate templates = 2;
+  string css = 3;
+  // Optional optimistic concurrency precondition.
+  optional int64 expected_usn = 4;
+}
+
+message UpdateNotetypeContentResponse {
+  Notetype notetype = 1;
+}
+
+message UpdateTemplatesRequest {
+  int64 notetype_id = 1;
+  // Updated template definitions, matched by `ordinal`.
+  repeated NotetypeTemplate templates = 2;
+  // Optional optimistic concurrency precondition.
+  optional int64 expected_usn = 3;
+}
+
+message UpdateTemplatesResponse {
+  Notetype notetype = 1;
+}
+
+message UpdateTemplatesBatchRequest {
+  repeated UpdateTemplatesRequest updates = 1;
+}
+
+message NotetypeWriteMetadata {
+  int64 notetype_id = 1;
+  int64 usn = 2;
+}
+
+message UpdateTemplatesBatchResponse {
+  // Successful write metadata, in request order, for successful prefix.
+  repeated NotetypeWriteMetadata results = 1;
+}
+
+message UpdateCssRequest {
+  int64 notetype_id = 1;
+  string css = 2;
+  // Optional optimistic concurrency precondition.
+  optional int64 expected_usn = 3;
+}
+
+message UpdateCssResponse {
+  Notetype notetype = 1;
+}
+
+message UpdateCssBatchRequest {
+  repeated UpdateCssRequest updates = 1;
+}
+
+message UpdateCssBatchResponse {
+  // Successful write metadata, in request order, for successful prefix.
+  repeated NotetypeWriteMetadata results = 1;
+}
+
+message GetNotetypeChangesRequest {
+  // Cursor format: `"<usn>:<notetype_id>"`. Empty means from beginning.
+  string cursor = 1;
+  // Page size hint. Server applies defaults and upper bounds.
+  uint32 limit = 2;
+}
+
+message NotetypeChange {
+  int64 notetype_id = 1;
+  google.protobuf.Timestamp modified_at = 2;
+  int64 usn = 3;
+}
+
+message GetNotetypeChangesResponse {
+  repeated NotetypeChange changes = 1;
+  // Empty when there are no additional pages.
+  string next_cursor = 2;
+}
+
+message CountNotetypesRequest {}
+
+message CountNotetypesResponse {
+  uint64 count = 1;
+}

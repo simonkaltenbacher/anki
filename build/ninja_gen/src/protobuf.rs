@@ -21,26 +21,26 @@ pub fn protoc_archive(platform: Platform) -> OnlineArchive {
     match platform {
         Platform::LinuxX64 => {
             OnlineArchive {
-                url: "https://github.com/protocolbuffers/protobuf/releases/download/v31.1/protoc-31.1-linux-x86_64.zip",
-                sha256: "96553041f1a91ea0efee963cb16f462f5985b4d65365f3907414c360044d8065",
+                url: "https://github.com/protocolbuffers/protobuf/releases/download/v33.5/protoc-33.5-linux-x86_64.zip",
+                sha256: "24e58fb231d50306ee28491f33a170301e99540f7e29ca461e0e80fd1239f8d1",
             }
         },
         Platform::LinuxArm => {
             OnlineArchive {
-                url: "https://github.com/protocolbuffers/protobuf/releases/download/v31.1/protoc-31.1-linux-aarch_64.zip",
-                sha256: "6c554de11cea04c56ebf8e45b54434019b1cd85223d4bbd25c282425e306ecc2",
+                url: "https://github.com/protocolbuffers/protobuf/releases/download/v33.5/protoc-33.5-linux-aarch_64.zip",
+                sha256: "2b0fcf9b2c32cbadccc0eb7a88b841fffecd4a06fc80acdba2b5be45e815c38a",
             }
         },
         Platform::MacX64 | Platform::MacArm => {
             OnlineArchive {
-                url: "https://github.com/protocolbuffers/protobuf/releases/download/v31.1/protoc-31.1-osx-universal_binary.zip",
-                sha256: "99ea004549c139f46da5638187a85bbe422d78939be0fa01af1aa8ab672e395f",
+                url: "https://github.com/protocolbuffers/protobuf/releases/download/v33.5/protoc-33.5-osx-universal_binary.zip",
+                sha256: "f998ba34b5a4e3c1d0657ad615f5e73e492eff2b186525303e84e6b6f7bbd2b1",
             }
         },
         Platform::WindowsX64 | Platform::WindowsArm => {
             OnlineArchive {
-                url: "https://github.com/protocolbuffers/protobuf/releases/download/v31.1/protoc-31.1-win64.zip",
-                sha256: "70381b116ab0d71cb6a5177d9b17c7c13415866603a0fd40d513dafe32d56c35",
+                url: "https://github.com/protocolbuffers/protobuf/releases/download/v33.5/protoc-33.5-win64.zip",
+                sha256: "7e3468cd1fbd1ae9361a5304d4ac28fbd593aa1a425b5464bd9d4da5fca224b4",
             }
         }
     }

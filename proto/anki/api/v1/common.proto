@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package anki.api.v1;
+
+// Structured application error detail attached to gRPC status details.
+// `code` values are stable integration contract values (for example
+// `VERSION_CONFLICT` for optimistic concurrency failures).
+message ErrorDetail {
+  string code = 1;
+  bool retryable = 2;
+  string message = 3;
+}

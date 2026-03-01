@@ -16,6 +16,7 @@ use crate::notetype::NotetypeChangeInfo;
 use crate::notetype::NotetypeId;
 use crate::notetype::NotetypeSchema11;
 use crate::prelude::IntoNewtypeVec;
+use crate::types::Usn;
 
 impl crate::services::NotetypesService for Collection {
     fn add_notetype(
@@ -226,6 +227,33 @@ impl crate::services::NotetypesService for Collection {
                 .map(|ord| (*ord) as u32)
                 .collect(),
         })
+    }
+
+    // anki-api extension: paged notetype change feed for external API consumers.
+    fn get_notetype_changes_page(
+        &mut self,
+        input: anki_proto::notetypes::GetNotetypeChangesPageRequest,
+    ) -> error::Result<anki_proto::notetypes::GetNotetypeChangesPageResponse> {
+        let after_usn = if input.after_usn < i64::from(i32::MIN) {
+            i32::MIN
+        } else if input.after_usn > i64::from(i32::MAX) {
+            i32::MAX
+        } else {
+            input.after_usn as i32
+        };
+        let entries = self
+            .storage
+            .get_notetype_changes_page(Usn(after_usn), NotetypeId(input.after_id), input.limit)?
+            .into_iter()
+            .map(
+                |(notetype_id, usn, mtime_secs)| anki_proto::notetypes::NotetypeChangeEntry {
+                    notetype_id: notetype_id.0,
+                    usn: usn.0,
+                    mtime_secs: mtime_secs.0,
+                },
+            )
+            .collect();
+        Ok(anki_proto::notetypes::GetNotetypeChangesPageResponse { entries })
     }
 }
 

@@ -1,0 +1,16 @@
+[package]
+name = "anki-api-client"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+rust-version.workspace = true
+description = "Rust client for Anki API v1"
+
+[dependencies]
+anki-api-proto = { path = "../anki-api-proto" }
+tonic.workspace = true
+thiserror.workspace = true
+prost14 = { package = "prost", version = "0.14" }
+futures.workspace = true

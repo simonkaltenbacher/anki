@@ -29,6 +29,8 @@ service NotesService {
   rpc NoteFieldsCheck(Note) returns (NoteFieldsCheckResponse);
   rpc CardsOfNote(NoteId) returns (cards.CardIds);
   rpc GetSingleNotetypeOfNotes(notes.NoteIds) returns (notetypes.NotetypeId);
+  rpc GetNoteChangesPage(GetNoteChangesPageRequest)
+      returns (GetNoteChangesPageResponse);
 }
 
 // Implicitly includes any of the above methods that are not listed in the
@@ -119,4 +121,20 @@ message NoteFieldsCheckResponse {
     FIELD_NOT_CLOZE = 5;
   }
   State state = 1;
+}
+
+message GetNoteChangesPageRequest {
+  int64 after_usn = 1;
+  int64 after_id = 2;
+  uint32 limit = 3;
+}
+
+message NoteChangeEntry {
+  int64 note_id = 1;
+  sint32 usn = 2;
+  int64 mtime_secs = 3;
+}
+
+message GetNoteChangesPageResponse {
+  repeated NoteChangeEntry entries = 1;
 }

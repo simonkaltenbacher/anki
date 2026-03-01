@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package anki.api.v1;
+
+// Provides server metadata and capability negotiation.
+service SystemService {
+  rpc GetServerInfo(GetServerInfoRequest) returns (GetServerInfoResponse);
+}
+
+message GetServerInfoRequest {}
+
+message GetServerInfoResponse {
+  // Wire/protocol contract version (`v1`).
+  string api_version = 1;
+  // API server implementation version (for example `anki-api/0.0.0`).
+  string server_version = 2;
+  // Capability keys that clients should use for feature gating.
+  repeated string capabilities = 3;
+  // Host Anki application version, if provided by server startup config.
+  string anki_version = 4;
+}

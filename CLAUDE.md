@@ -1,4 +1,6 @@
-# Claude Code Configuration
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
@@ -80,6 +82,51 @@ when possible.
 
 in rslib, use error/mod.rs's AnkiError/Result and snafu. In our other Rust modules, prefer anyhow + additional context where appropriate. Unwrapping
 in build scripts/tests is fine.
+
+## Additional Build Commands
+
+| Command | Purpose |
+|---------|---------|
+| `./ninja format` | Format all code (Rust, Python, TypeScript) |
+| `./ninja fix` | Fix ruff/eslint/copyright header issues |
+| `cargo clippy --fix` | Fix Rust clippy issues |
+| `./run` | Build and run Anki in dev mode (sets ANKIDEV=1) |
+| `./ninja check:svelte:editor` | Run a specific check target (use target name from check output) |
+
+## Testing
+
+- **Rust tests:** `cargo nextest run` (uses cargo-nextest). Tests are inline `#[cfg(test)]` modules and dedicated `tests.rs` files within rslib/
+- **Python tests:** pytest, run via `./ninja check`. Test files in pylib/tests/ and qt/tests/
+- **TypeScript tests:** vitest, run via `./ninja check`
+- **Rust benchmarks:** `rslib/bench.sh` (uses `cargo criterion`)
+
+## Translation Access Patterns
+
+Assuming a string `addons-you-have-count` has been added to addons.ftl:
+- **Python:** `from aqt.utils import tr; tr.addons_you_have_count(count=3)`
+- **TypeScript:** `import * as tr from "@generated/ftl"; tr.addonsYouHaveCount({count: 3})`
+- **Rust:** `collection.tr.addons_you_have_count(3)`
+- **Qt .ui files:** Translatable labels automatically use the registered FTL string (e.g., label text `addons_you_have_count`)
+
+## Python Conventions
+
+- Type hints are required on new code — tests will fail without them
+- Use `qconnect()` from aqt.utils to connect Qt signals (works around type stub issues)
+- For circular imports, use `from __future__ import annotations` with fully qualified names
+- Use standard snake_case for variables and functions
+
+## Build System Internals
+
+`./check` runs `./ninja format && ./ninja check`. The `./ninja` script invokes `build/runner` which calls `build/configure` to generate ninja rules. The build system (build/ninja_gen/) has modular handlers for Rust, Python, Node, and protobuf compilation.
+
+## Formatting Tools
+
+- **Rust:** rustfmt (`.rustfmt.toml`)
+- **Python:** ruff (`.ruff.toml`) for linting, mypy (`.mypy.ini`) for type checking
+- **TypeScript/JSON/Markdown/TOML:** dprint (`.dprint.json`)
+- **TypeScript/Svelte:** eslint (`.eslintrc.cjs`)
+
+Place personal untracked files in an `extra/` folder to exclude them from formatting and checks.
 
 ## Individual preferences
 

@@ -7,6 +7,9 @@ rust-version = "1.80"
 
 [workspace]
 members = [
+  "api/anki-api",
+  "api/anki-api-client",
+  "api/anki-api-proto",
   "build/configure",
   "build/ninja_gen",
   "build/runner",
@@ -80,7 +83,7 @@ fluent = "0.17.0"
 fluent-bundle = "0.16.0"
 fluent-syntax = "0.12.0"
 fnv = "1.0.7"
-futures = "0.3.31"
+futures = "0.3.32"
 globset = "0.4.16"
 hex = "0.4.3"
 htmlescape = "0.3.1"
@@ -129,12 +132,19 @@ syn = { version = "2.0.103", features = ["parsing", "printing"] }
 tar = "0.4.44"
 tempfile = "3.20.0"
 termcolor = "1.4.1"
+thiserror = "2.0.12"
 tokio = { version = "1.45", features = ["fs", "rt-multi-thread", "macros", "signal"] }
+tokio-stream = "0.1.18"
 tokio-util = { version = "0.7.15", features = ["io"] }
+tonic = { version = "0.14", features = ["transport"] }
+tonic-build = "0.14"
+tonic-health = "0.14"
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
 tower-http = { version = "0.6.6", features = ["trace"] }
 tracing = { version = "0.1.41", features = ["max_level_trace", "release_max_level_debug"] }
 tracing-appender = "0.2.3"
-tracing-subscriber = { version = "0.3.20", features = ["fmt", "env-filter"] }
+tracing-subscriber = { version = "0.3.20", features = ["fmt", "env-filter", "json"] }
 unic-langid = { version = "0.9.6", features = ["macros"] }
 unic-ucd-category = "0.9.0"
 unicode-normalization = "0.1.24"

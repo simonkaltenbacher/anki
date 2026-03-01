@@ -143,7 +143,7 @@ fn build_rsbridge(build: &mut Build) -> Result<()> {
         "pylib:rsbridge",
         CargoBuild {
             inputs: inputs![
-                glob!["{pylib/rsbridge/**,rslib/**}"],
+                glob!["{pylib/rsbridge/**,rslib/**,api/**}"],
                 // declare a dependency on i18n/proto so they get built first, allowing
                 // things depending on them to build faster, and ensuring
                 // changes to the ftl files trigger a rebuild

@@ -105,6 +105,18 @@ MainWindowState = Literal[
 T = TypeVar("T")
 
 
+def _env_bool(name: str) -> bool | None:
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    lowered = value.strip().lower()
+    if lowered in ("1", "true", "yes", "on"):
+        return True
+    if lowered in ("0", "false", "no", "off"):
+        return False
+    return None
+
+
 class MainWebView(AnkiWebView):
     def __init__(self, mw: AnkiQt) -> None:
         AnkiWebView.__init__(self, kind=AnkiWebViewKind.MAIN)
@@ -684,6 +696,7 @@ class AnkiQt(QMainWindow):
     def _loadCollection(self) -> None:
         cpath = self.pm.collectionPath()
         self.col = Collection(cpath, backend=self.backend)
+        self._start_api_server()
         self.setEnabled(True)
 
     def reopen(self, after_full_sync: bool = False) -> None:
@@ -705,6 +718,7 @@ class AnkiQt(QMainWindow):
         self.closeAllWindows(before_sync)
 
     def _unloadCollection(self) -> None:
+        self._stop_api_server()
         if not self.col:
             return
 
@@ -743,6 +757,47 @@ class AnkiQt(QMainWindow):
 
         if corrupt:
             showWarning(tr.qt_misc_your_collection_file_appears_to_be())
+
+    def _start_api_server(self) -> None:
+        enabled = _env_bool("ANKI_PUBLIC_API_ENABLED")
+        if enabled is False:
+            return
+        if enabled is None and "ANKI_PUBLIC_API_KEY" not in os.environ and "ANKI_PUBLIC_API_AUTH_DISABLED" not in os.environ:
+            return
+
+        host = os.environ.get("ANKI_PUBLIC_API_HOST") or None
+        port_value = os.environ.get("ANKI_PUBLIC_API_PORT")
+        port: int | None = None
+        if port_value:
+            try:
+                port = int(port_value)
+            except ValueError:
+                print(f"invalid ANKI_PUBLIC_API_PORT value: {port_value}")
+                return
+        api_key = os.environ.get("ANKI_PUBLIC_API_KEY") or None
+
+        try:
+            self.backend.start_api_server(
+                host=host,
+                port=port,
+                api_key=api_key,
+                anki_version=anki.buildinfo.version,
+                auth_disabled=_env_bool("ANKI_PUBLIC_API_AUTH_DISABLED"),
+                allow_non_local=_env_bool("ANKI_PUBLIC_API_ALLOW_NON_LOCAL"),
+                allow_loopback_unauthenticated_health_check=_env_bool(
+                    "ANKI_PUBLIC_API_ALLOW_LOOPBACK_HEALTH_WITHOUT_AUTH"
+                ),
+            )
+        except Exception:
+            print("failed to start anki api server:")
+            traceback.print_exc()
+
+    def _stop_api_server(self) -> None:
+        try:
+            self.backend.stop_api_server()
+        except Exception:
+            print("failed to stop anki api server:")
+            traceback.print_exc()
 
     def apply_collection_options(self) -> None:
         "Setup audio after collection loaded."

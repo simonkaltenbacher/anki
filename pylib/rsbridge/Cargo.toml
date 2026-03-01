@@ -16,7 +16,9 @@ test = false
 
 [dependencies]
 anki.workspace = true
+anki-api = { path = "../../api/anki-api" }
 pyo3.workspace = true
+tokio.workspace = true
 
 [features]
 rustls = ["anki/rustls"]

@@ -34,6 +34,8 @@ service NotetypesService {
   rpc RestoreNotetypeToStock(RestoreNotetypeToStockRequest)
       returns (collection.OpChanges);
   rpc GetClozeFieldOrds(NotetypeId) returns (GetClozeFieldOrdsResponse);
+  rpc GetNotetypeChangesPage(GetNotetypeChangesPageRequest)
+      returns (GetNotetypeChangesPageResponse);
 }
 
 // Implicitly includes any of the above methods that are not listed in the
@@ -246,4 +248,20 @@ enum ClozeField {
 
 message GetClozeFieldOrdsResponse {
   repeated uint32 ords = 1;
+}
+
+message GetNotetypeChangesPageRequest {
+  int64 after_usn = 1;
+  int64 after_id = 2;
+  uint32 limit = 3;
+}
+
+message NotetypeChangeEntry {
+  int64 notetype_id = 1;
+  sint32 usn = 2;
+  int64 mtime_secs = 3;
+}
+
+message GetNotetypeChangesPageResponse {
+  repeated NotetypeChangeEntry entries = 1;
 }

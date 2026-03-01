@@ -50,6 +50,21 @@ impl super::SqliteStorage {
             .collect()
     }
 
+    // anki-api extension: storage query used by paged note change feed RPC.
+    pub(crate) fn get_note_changes_page(
+        &self,
+        after_usn: Usn,
+        after_id: NoteId,
+        limit: u32,
+    ) -> Result<Vec<(NoteId, Usn, TimestampSecs)>> {
+        self.db
+            .prepare_cached(include_str!("get_changes_page.sql"))?
+            .query_and_then(params![after_usn, after_id, limit], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect()
+    }
+
     /// If fields have been modified, caller must call note.prepare_for_update()
     /// prior to calling this.
     pub(crate) fn update_note(&self, note: &Note) -> Result<()> {

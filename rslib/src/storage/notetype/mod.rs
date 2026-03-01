@@ -150,6 +150,21 @@ impl SqliteStorage {
             .collect()
     }
 
+    // anki-api extension: storage query used by paged notetype change feed RPC.
+    pub(crate) fn get_notetype_changes_page(
+        &self,
+        after_usn: Usn,
+        after_id: NotetypeId,
+        limit: u32,
+    ) -> Result<Vec<(NotetypeId, Usn, TimestampSecs)>> {
+        self.db
+            .prepare_cached(include_str!("get_changes_page.sql"))?
+            .query_and_then(params![after_usn, after_id, limit], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })?
+            .collect()
+    }
+
     /// Returns list of (id, name, use_count)
     pub fn get_notetype_use_counts(&self) -> Result<Vec<(NotetypeId, String, u32)>> {
         self.db
