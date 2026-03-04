@@ -119,9 +119,9 @@ impl NotesService for NotesApi {
         request: Request<ListNoteRefsRequest>,
     ) -> Result<Response<Self::ListNoteRefsStream>, Status> {
         let req = request.into_inner();
-        Ok(Response::new(
-            self.stream_note_refs_for_query(req.query, req.offset, req.limit),
-        ))
+        Ok(Response::new(self.stream_note_refs_for_query(
+            req.query, req.offset, req.limit,
+        )))
     }
 
     async fn list_notes(
@@ -383,10 +383,11 @@ mod tests {
     use tonic::Request;
 
     use super::*;
+    use crate::service::common::TestStore;
 
     #[tokio::test]
     async fn update_note_fields_reports_version_conflict_details() {
-        let fixture = crate::service::common::TestStore::new("notes-conflict");
+        let fixture = TestStore::new("notes-conflict");
         let store = fixture.store();
         let api = NotesApi::new(store.clone());
         let note = store.create_test_note().expect("seed note");
@@ -433,7 +434,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_note_fields_applies_changes_without_precondition() {
-        let fixture = crate::service::common::TestStore::new("notes-update-success");
+        let fixture = TestStore::new("notes-update-success");
         let store = fixture.store();
         let api = NotesApi::new(store.clone());
         let note = store.create_test_note().expect("seed note");
@@ -465,7 +466,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_note_fields_batch_returns_sort_field_and_usn() {
-        let fixture = crate::service::common::TestStore::new("notes-batch-write-metadata");
+        let fixture = TestStore::new("notes-batch-write-metadata");
         let store = fixture.store();
         let api = NotesApi::new(store.clone());
         let note = store.create_test_note().expect("seed note");
@@ -500,7 +501,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_note_fields_rejects_unknown_name() {
-        let fixture = crate::service::common::TestStore::new("notes-update-unknown-field");
+        let fixture = TestStore::new("notes-update-unknown-field");
         let store = fixture.store();
         let api = NotesApi::new(store.clone());
         let note = store.create_test_note().expect("seed note");
@@ -523,7 +524,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_note_fields_rejects_empty_fields() {
-        let fixture = crate::service::common::TestStore::new("notes-update-empty");
+        let fixture = TestStore::new("notes-update-empty");
         let store = fixture.store();
         let api = NotesApi::new(store.clone());
         let note = store.create_test_note().expect("seed note");
@@ -543,7 +544,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_note_fields_allows_duplicate_names_last_wins() {
-        let fixture = crate::service::common::TestStore::new("notes-update-duplicate");
+        let fixture = TestStore::new("notes-update-duplicate");
         let store = fixture.store();
         let api = NotesApi::new(store.clone());
         let note = store.create_test_note().expect("seed note");
@@ -577,7 +578,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_note_fields_batch_allows_partial_named_updates() {
-        let fixture = crate::service::common::TestStore::new("notes-update-batch-write-metadata");
+        let fixture = TestStore::new("notes-update-batch-write-metadata");
         let store = fixture.store();
         let api = NotesApi::new(store.clone());
         let note = store.create_test_note().expect("seed note");
@@ -611,7 +612,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_note_returns_named_fields_in_ordinal_order() {
-        let fixture = crate::service::common::TestStore::new("notes-get-named-fields");
+        let fixture = TestStore::new("notes-get-named-fields");
         let store = fixture.store();
         let api = NotesApi::new(store.clone());
         let note = store.create_test_note().expect("seed note");
@@ -639,7 +640,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_notes_returns_results_in_request_order() {
-        let fixture = crate::service::common::TestStore::new("notes-get-batch-order");
+        let fixture = TestStore::new("notes-get-batch-order");
         let store = fixture.store();
         let api = NotesApi::new(store.clone());
         let note_a = store.create_test_note().expect("seed note a");
@@ -665,8 +666,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_notes_returns_named_fields_for_filtered_and_unfiltered_queries() {
-        let fixture =
-            crate::service::common::TestStore::new("notes-list-filtered-unfiltered-named-fields");
+        let fixture = TestStore::new("notes-list-filtered-unfiltered-named-fields");
         let store = fixture.store();
         let api = NotesApi::new(store.clone());
         let note = store.create_test_note().expect("seed note");
@@ -730,7 +730,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_note_refs_returns_note_id_and_sort_field() {
-        let fixture = crate::service::common::TestStore::new("notes-list-refs");
+        let fixture = TestStore::new("notes-list-refs");
         let store = fixture.store();
         let api = NotesApi::new(store.clone());
         let note = store.create_test_note().expect("seed note");
@@ -760,7 +760,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_note_changes_supports_cursor_paging() {
-        let fixture = crate::service::common::TestStore::new("notes-changes-paging");
+        let fixture = TestStore::new("notes-changes-paging");
         let store = fixture.store();
         let api = NotesApi::new(store.clone());
         let _ = store.create_test_note().expect("seed note 1");
@@ -801,7 +801,7 @@ mod tests {
 
     #[tokio::test]
     async fn count_notes_returns_total_for_empty_query() {
-        let fixture = crate::service::common::TestStore::new("notes-count-empty-query");
+        let fixture = TestStore::new("notes-count-empty-query");
         let store = fixture.store();
         let api = NotesApi::new(store.clone());
         let _ = store.create_test_note().expect("seed note 1");
@@ -822,7 +822,7 @@ mod tests {
 
     #[tokio::test]
     async fn count_notes_respects_query_filter() {
-        let fixture = crate::service::common::TestStore::new("notes-count-filtered");
+        let fixture = TestStore::new("notes-count-filtered");
         let store = fixture.store();
         let api = NotesApi::new(store.clone());
         let note = store.create_test_note().expect("seed note");
@@ -842,7 +842,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_note_refs_respects_offset() {
-        let fixture = crate::service::common::TestStore::new("notes-list-refs-offset");
+        let fixture = TestStore::new("notes-list-refs-offset");
         let store = fixture.store();
         let api = NotesApi::new(store.clone());
         let _ = store.create_test_note().expect("seed note a");
@@ -888,7 +888,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_note_refs_respects_limit() {
-        let fixture = crate::service::common::TestStore::new("notes-list-refs-limit");
+        let fixture = TestStore::new("notes-list-refs-limit");
         let store = fixture.store();
         let api = NotesApi::new(store.clone());
         let _ = store.create_test_note().expect("seed note a");
@@ -916,7 +916,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_note_refs_respects_offset_and_limit() {
-        let fixture = crate::service::common::TestStore::new("notes-list-refs-offset-limit");
+        let fixture = TestStore::new("notes-list-refs-offset-limit");
         let store = fixture.store();
         let api = NotesApi::new(store.clone());
         let _ = store.create_test_note().expect("seed note a");
@@ -962,8 +962,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_notes_respects_offset_and_limit() {
-        let fixture =
-            crate::service::common::TestStore::new("notes-list-notes-offset-limit");
+        let fixture = TestStore::new("notes-list-notes-offset-limit");
         let store = fixture.store();
         let api = NotesApi::new(store.clone());
         let _ = store.create_test_note().expect("seed note a");
