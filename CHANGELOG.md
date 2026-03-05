@@ -45,10 +45,16 @@ This file tracks local changes on top of upstream Anki.
 - [proto/internal] Aligned internal change-entry scalar types for consistency:
   `usn` as `sint32`, `mtime_secs` as `int64` (notes + notetypes).
 - [launcher] Removed third-party locale dependency usage from launcher startup path.
+- [launcher] Local install mode now treats a missing `.sync_complete` marker as a forced reinstall trigger.
+- [launcher] Local install mode now forces `uv sync` to reinstall bundled `anki` and `aqt` wheels even when the package version is unchanged.
+- [launcher/mac] Direct terminal invocation now keeps Anki attached after install/update so stdout/stderr logs remain visible; Finder-style launches still detach.
 
 ### Fixed
 - [launcher] Prevented startup crash on malformed locale data by replacing panic-prone locale detection path.
+- [launcher] Added compatibility fallback when Python expects newer rsbridge API config helpers than the loaded backend exposes.
 - [rslib] Added defensive cursor conversion by clamping `after_usn` (`int64`) to `i32` range before constructing `Usn` (notes + notetypes).
+- [launcher/mac] Local installer now uses `ditto` and `lsregister` for app bundle installation/registration, and clears the installed venv/lock/sync state to force a clean reinstall from bundled wheels.
+- [launcher/mac] Suppressed detached-launch messaging when the launcher will exec Anki directly in the current terminal.
 
 ### Security
 - [api] API keys are no longer read from profile config; API key remains env/runtime supplied (`ANKI_PUBLIC_API_KEY`).

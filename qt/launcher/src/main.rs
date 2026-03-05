@@ -4,6 +4,7 @@
 #![windows_subsystem = "windows"]
 
 use std::io::stdin;
+use std::io::IsTerminal;
 use std::io::stdout;
 use std::io::Write;
 use std::process::Command;
@@ -151,12 +152,16 @@ fn run() -> Result<()> {
     // Calculate whether user has custom edits that need syncing
     let pyproject_time = file_timestamp_secs(&state.user_pyproject_path);
     let sync_time = file_timestamp_secs(&state.sync_complete_marker);
+    let sync_missing = !state.sync_complete_marker.exists();
     state.pyproject_modified_by_user = pyproject_time > sync_time;
     let pyproject_has_changed = state.pyproject_modified_by_user;
     let different_launcher = diff_launcher_was_installed(&state)?;
     let local_mode = is_local_install_mode(&state);
     let local_auto_install = local_mode
-        && (!state.user_pyproject_path.exists() || different_launcher || pyproject_has_changed);
+        && (sync_missing
+            || !state.user_pyproject_path.exists()
+            || different_launcher
+            || pyproject_has_changed);
 
     if local_mode {
         ensure_local_wheels_present(&state)?;
@@ -206,6 +211,16 @@ fn run() -> Result<()> {
     {
         let cmd = build_python_command(&state, &[])?;
         platform::mac::prepare_for_launch_after_update(cmd, &uv_install_root)?;
+    }
+
+    #[cfg(target_os = "macos")]
+    if std::io::stdout().is_terminal()
+        && std::env::var("ANKI_LAUNCHER_RELAUNCHED_IN_TERMINAL").is_err()
+    {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        let cmd = build_python_command(&state, &args)?;
+        launch_anki_normally(cmd)?;
+        return Ok(());
     }
 
     if cfg!(unix) && !cfg!(target_os = "macos") {
@@ -409,6 +424,10 @@ fn handle_version_install_or_update(state: &State, choice: MainMenuChoice) -> Re
     command.args(["sync", "--upgrade", "--no-config"]);
     if !state.system_qt {
         command.arg("--managed-python");
+    }
+    if is_local_install_mode(state) {
+        command.args(["--reinstall-package", "anki"]);
+        command.args(["--reinstall-package", "aqt"]);
     }
 
     // Add python version if .python-version file exists (but not for system Qt)
