@@ -29,6 +29,7 @@ use crate::platform::get_uv_binary_name;
 use crate::platform::launch_anki_normally;
 use crate::platform::respawn_launcher;
 
+mod locale;
 mod platform;
 
 struct State {
@@ -102,7 +103,7 @@ fn run() -> Result<()> {
 
     let (exe_dir, resources_dir) = get_exe_and_resources_dirs()?;
 
-    let locale = locale_config::Locale::user_default().to_string();
+    let locale = locale::user_locale();
 
     let mut state = State {
         tr: I18n::new(&[if !locale.is_empty() {
@@ -153,8 +154,15 @@ fn run() -> Result<()> {
     state.pyproject_modified_by_user = pyproject_time > sync_time;
     let pyproject_has_changed = state.pyproject_modified_by_user;
     let different_launcher = diff_launcher_was_installed(&state)?;
+    let local_mode = is_local_install_mode(&state);
+    let local_auto_install = local_mode
+        && (!state.user_pyproject_path.exists() || different_launcher || pyproject_has_changed);
 
-    if !launcher_requested && !pyproject_has_changed && !different_launcher {
+    if local_mode {
+        ensure_local_wheels_present(&state)?;
+    }
+
+    if !launcher_requested && !pyproject_has_changed && !different_launcher && !local_auto_install {
         // If no launcher request and venv is already up to date, launch Anki normally
         let args: Vec<String> = std::env::args().skip(1).collect();
         let cmd = build_python_command(&state, &args)?;
@@ -175,11 +183,21 @@ fn run() -> Result<()> {
 
     ensure_os_supported()?;
 
-    println!("{}\n", state.tr.launcher_press_enter_to_install());
+    if local_auto_install {
+        println!("Detected local install mode. Installing from bundled wheels.\n");
+        copy_file(&state.dist_pyproject_path, &state.user_pyproject_path)?;
+        copy_file(
+            &state.dist_python_version_path,
+            &state.user_python_version_path,
+        )?;
+        handle_version_install_or_update(&state, MainMenuChoice::KeepExisting)?;
+    } else {
+        println!("{}\n", state.tr.launcher_press_enter_to_install());
 
-    check_versions(&mut state);
+        check_versions(&mut state);
 
-    main_menu_loop(&state)?;
+        main_menu_loop(&state)?;
+    }
 
     // Write marker file to indicate we've completed the sync process
     write_sync_marker(&state)?;
@@ -207,6 +225,61 @@ fn run() -> Result<()> {
 
     // respawn the launcher as a disconnected subprocess for normal startup
     respawn_launcher()?;
+
+    Ok(())
+}
+
+fn is_local_install_mode(state: &State) -> bool {
+    state.resources_dir.join("local-install-mode").exists()
+}
+
+fn local_wheels_dir(state: &State) -> Option<std::path::PathBuf> {
+    let wheels_dir = state.resources_dir.join("wheels");
+    if !wheels_dir.is_dir() {
+        return None;
+    }
+
+    let has_wheels = std::fs::read_dir(&wheels_dir).ok()?.flatten().any(|entry| {
+        entry
+            .path()
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("whl"))
+    });
+    if has_wheels {
+        Some(wheels_dir)
+    } else {
+        None
+    }
+}
+
+fn ensure_local_wheels_present(state: &State) -> Result<()> {
+    let wheels_dir = local_wheels_dir(state)
+        .context("local install mode enabled but no wheels found in Resources/wheels")?;
+    let mut has_anki = false;
+    let mut has_aqt = false;
+
+    for entry in std::fs::read_dir(&wheels_dir)? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy().to_ascii_lowercase();
+
+        if !file_name.ends_with(".whl") {
+            continue;
+        }
+
+        if file_name.starts_with("anki-") {
+            has_anki = true;
+        } else if file_name.starts_with("aqt-") {
+            has_aqt = true;
+        }
+    }
+
+    if !has_anki || !has_aqt {
+        anyhow::bail!(
+            "local install mode requires bundled anki and aqt wheels in Resources/wheels"
+        );
+    }
 
     Ok(())
 }
@@ -1017,6 +1090,14 @@ fn uv_command(state: &State) -> Result<Command> {
         command
             .env("UV_PYTHON_INSTALL_MIRROR", &python_mirror)
             .env("UV_DEFAULT_INDEX", &pypi_mirror);
+    }
+
+    if is_local_install_mode(state) {
+        let wheels_dir = local_wheels_dir(state)
+            .context("local install mode enabled but no wheels found in Resources/wheels")?;
+        command
+            .env("UV_FIND_LINKS", wheels_dir.utf8()?.as_str())
+            .env("UV_NO_INDEX", "1");
     }
 
     if state.no_cache_marker.exists() {

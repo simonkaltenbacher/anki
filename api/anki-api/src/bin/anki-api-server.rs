@@ -1,6 +1,7 @@
 use std::env;
 use std::path::PathBuf;
 
+use anki_api::config::FileConfig;
 use anki_api::config::ProfileConfig;
 use anki_api::config::RuntimeOverrides;
 use anki_api::config::ServerConfig;
@@ -11,11 +12,19 @@ use anki_api::store;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     logging::init_json_logging();
-    let config = ServerConfig::resolve(RuntimeOverrides::default(), ProfileConfig::default())
-        .map_err(|err| {
-            tracing::error!(error = %err, "failed to resolve anki api server config");
-            err
-        })?;
+    let file_config = FileConfig::load_default().map_err(|err| {
+        tracing::error!(error = %err, "failed to load anki api file config");
+        err
+    })?;
+    let config = ServerConfig::resolve(
+        RuntimeOverrides::default(),
+        file_config,
+        ProfileConfig::default(),
+    )
+    .map_err(|err| {
+        tracing::error!(error = %err, "failed to resolve anki api server config");
+        err
+    })?;
 
     let env_collection_path = env::var("ANKI_PUBLIC_API_COLLECTION_DB_PATH")
         .ok()

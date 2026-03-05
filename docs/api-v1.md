@@ -46,6 +46,80 @@ By default, API key auth is enabled:
 2. Missing/invalid key returns `UNAUTHENTICATED`.
 3. Server capabilities include `auth.api_key` when auth is enabled.
 
+## Configuration
+
+### Desktop Anki (`aqt`) configuration sources
+
+The in-process API server reads configuration from:
+
+1. Runtime overrides passed from the desktop layer.
+2. Environment variables (`ANKI_PUBLIC_API_*`).
+3. Native API config file (`public-api.toml`).
+4. Local profile config keys (`anki_public_api_*` in `prefs21.db`).
+5. Built-in defaults.
+
+Effective precedence for server settings is:
+
+1. runtime overrides
+2. environment variables
+3. file config
+4. profile config
+5. defaults
+
+Startup enable/disable is determined in the desktop layer before launching the
+gRPC thread:
+
+1. `ANKI_PUBLIC_API_ENABLED` overrides profile enable.
+2. `anki_public_api_enabled` is used when env enable is unset.
+3. Explicit `false` disables startup.
+
+### Supported environment variables
+
+1. `ANKI_PUBLIC_API_ENABLED` (`true/false`, `1/0`)
+2. `ANKI_PUBLIC_API_HOST`
+3. `ANKI_PUBLIC_API_PORT`
+4. `ANKI_PUBLIC_API_KEY`
+5. `ANKI_PUBLIC_API_AUTH_DISABLED` (`true/false`, `1/0`)
+6. `ANKI_PUBLIC_API_ALLOW_NON_LOCAL` (`true/false`, `1/0`)
+7. `ANKI_PUBLIC_API_ALLOW_LOOPBACK_HEALTH_WITHOUT_AUTH` (`true/false`, `1/0`)
+
+### Supported profile config keys
+
+1. `anki_public_api_enabled` (`bool`)
+2. `anki_public_api_host` (`str`)
+3. `anki_public_api_port` (`int`)
+4. `anki_public_api_auth_disabled` (`bool`)
+5. `anki_public_api_allow_non_local` (`bool`)
+6. `anki_public_api_allow_loopback_unauthenticated_health_check` (`bool`)
+
+Security note:
+
+1. API keys are intentionally not read from profile config.
+2. Provide API keys via `ANKI_PUBLIC_API_KEY` (or runtime override).
+
+### Native API config file
+
+The API server can load file-based defaults from:
+
+1. macOS: `~/Library/Application Support/Anki2/public-api.toml`
+2. Linux: `~/.local/share/Anki2/public-api.toml`
+3. Windows: `%APPDATA%\\Anki2\\public-api.toml`
+
+Example:
+
+```toml
+[anki_public_api]
+enabled = true
+host = "127.0.0.1"
+port = 50051
+api_key = "replace-with-strong-random-key"
+auth_disabled = false
+allow_non_local = false
+allow_loopback_unauthenticated_health_check = false
+```
+
+Process environment variables still override file values.
+
 ## Error Contract
 
 ### gRPC Status Codes

@@ -179,6 +179,12 @@ class RustBackend(RustBackendGenerated):
         auth_disabled: bool | None = None,
         allow_non_local: bool | None = None,
         allow_loopback_unauthenticated_health_check: bool | None = None,
+        profile_host: str | None = None,
+        profile_port: int | None = None,
+        profile_anki_version: str | None = None,
+        profile_auth_disabled: bool | None = None,
+        profile_allow_non_local: bool | None = None,
+        profile_allow_loopback_unauthenticated_health_check: bool | None = None,
     ) -> None:
         self._backend.start_api_server(
             host=host,
@@ -187,7 +193,17 @@ class RustBackend(RustBackendGenerated):
             anki_version=anki_version,
             auth_disabled=auth_disabled,
             allow_non_local=allow_non_local,
-            allow_loopback_unauthenticated_health_check=allow_loopback_unauthenticated_health_check,
+            allow_loopback_unauthenticated_health_check=(
+                allow_loopback_unauthenticated_health_check
+            ),
+            profile_host=profile_host,
+            profile_port=profile_port,
+            profile_anki_version=profile_anki_version,
+            profile_auth_disabled=profile_auth_disabled,
+            profile_allow_non_local=profile_allow_non_local,
+            profile_allow_loopback_unauthenticated_health_check=(
+                profile_allow_loopback_unauthenticated_health_check
+            ),
         )
 
     def stop_api_server(self) -> None:

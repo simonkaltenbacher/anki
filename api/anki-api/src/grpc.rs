@@ -110,7 +110,11 @@ where
             Ok(request)
         });
 
-    tracing::info!(address = %bind_addr, "starting anki api grpc server");
+    tracing::info!(
+        address = %bind_addr,
+        auth = if config.auth_disabled { "disabled" } else { "enabled" },
+        "starting anki api grpc server"
+    );
     if config.allow_non_local {
         tracing::warn!("non-local binding enabled; terminate TLS at a reverse proxy");
     }

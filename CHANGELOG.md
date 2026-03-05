@@ -1,93 +1,62 @@
 # Changelog (Local Fork)
 
-This file tracks local changes made to the upstream Anki repository for the
-`anki-api`/gRPC integration work, to simplify future upstream merges.
+This file tracks local changes on top of upstream Anki.
 
-## Unreleased
+## 2026-03-05 (Unreleased)
 
-### `api/`
-- Added API workspace crates:
-  - `api/anki-api-proto`
-  - `api/anki-api`
-  - `api/anki-api-client`
-- Added gRPC API server wiring with auth, health, system, notes, and notetypes
-  services.
-- Added/updated capability handling and API docs alignment for implemented RPCs.
-- `api/anki-api-client`:
-  - high-level `ApiClient` with auth injection
-  - capability bootstrap/parsing
-  - typed error mapping (including version conflicts)
-  - streaming wrappers
-  - notetype lookup/ref methods:
-    - `get_notetype_id_by_name(...)`
-    - `list_notetype_refs()`
+### Added
+- [api] Added API workspace crates: `api/anki-api-proto`, `api/anki-api`, and `api/anki-api-client`.
+- [api] Added gRPC API server wiring for auth, health, system, notes, and notetypes services.
+- [api-client] Added high-level `ApiClient` with auth injection, capability bootstrap/parsing, typed error mapping (including version conflicts), and streaming wrappers.
+- [api-client] Added notetype lookup/ref methods: `get_notetype_id_by_name(...)` and `list_notetype_refs()`.
+- [proto/api-v1] Added and evolved public API v1 contracts for notes and notetypes: list/get/update (single+batch), refs, and change feeds.
+- [proto/api-v1] Added common/system/health contracts for structured errors, capabilities/server info, and dual health endpoints.
+- [proto/internal] Added internal paged change-feed RPCs: `NotesService.GetNoteChangesPage` and `NotetypesService.GetNotetypeChangesPage` (+ request/response/change entry messages).
+- [rslib] Added storage-layer paged change queries and methods:
+  `rslib/src/storage/note/get_changes_page.sql`,
+  `rslib/src/storage/notetype/get_changes_page.sql`,
+  `SqliteStorage::get_note_changes_page(...)`,
+  `SqliteStorage::get_notetype_changes_page(...)`.
+- [rslib] Added backend service implementations:
+  `rslib/src/notes/service.rs:get_note_changes_page(...)` and
+  `rslib/src/notetype/service.rs:get_notetype_changes_page(...)`.
+- [qt] Wired API server lifecycle into profile lifecycle (`qt/aqt/main.py`: start on profile open, stop on close/switch).
+- [qt] Added profile-backed API configuration keys:
+  `anki_public_api_enabled`,
+  `anki_public_api_host`,
+  `anki_public_api_port`,
+  `anki_public_api_auth_disabled`,
+  `anki_public_api_allow_non_local`,
+  `anki_public_api_allow_loopback_unauthenticated_health_check`.
+- [launcher] Added in-repo cross-platform locale module `qt/launcher/src/locale.rs` (env-first lookup + platform fallback + normalization + tests).
+- [launcher] Added explicit local-install mode for fork builds:
+  marker file `Contents/Resources/local-install-mode`,
+  bundled wheel source `Contents/Resources/wheels/`,
+  non-interactive install/update path for first install and rebuild/update scenarios.
+- [launcher] Added strict local wheel resolution in local mode: `UV_FIND_LINKS` + `UV_NO_INDEX=1`.
+- [api] Added native API config file loading (`public-api.toml`) in Rust config resolution, shared by both `./run` and packaged launcher startup paths.
+- [launcher/mac] Added local build tooling:
+  `qt/launcher/mac/build-local.sh` and `qt/launcher/mac/pyproject.local.toml`.
 
-### `proto/anki/api/v1/`
-- Added and evolved public API v1 contracts:
-  - Notes:
-    - streaming list/search endpoints
-    - streaming ID list/search endpoints
-    - named note field representation
-    - note write/update endpoints (single + batch)
-    - note change feed with cursor pagination
-  - Notetypes:
-    - list/get endpoints
-    - `GetNotetypeIdByName`
-    - lightweight refs endpoint: `ListNotetypeRefs` (`notetype_id`, `name`)
-    - update endpoints (content/templates/css, single + batch)
-    - notetype change feed with cursor pagination
-  - Common/system/health:
-    - structured error details for version conflicts
-    - server info/capabilities contract
-    - custom and standard gRPC health services
+### Changed
+- [api] Consolidated server config resolution semantics to runtime > env > file > profile > defaults.
+- [qt] Consolidated API startup gating into a resolved `api_server_enabled` flow (`ANKI_PUBLIC_API_ENABLED` over profile key).
+- [rslib] Changed notes change mapping to avoid truncating cast (`mtime_secs: mtime_secs.0`).
+- [proto/internal] Aligned internal change-entry scalar types for consistency:
+  `usn` as `sint32`, `mtime_secs` as `int64` (notes + notetypes).
+- [launcher] Removed third-party locale dependency usage from launcher startup path.
 
-### `proto/anki/` (internal backend proto)
-- Added paged change-feed RPCs:
-  - `proto/anki/notes.proto`:
-    - `NotesService.GetNoteChangesPage`
-    - `GetNoteChangesPageRequest`
-    - `NoteChangeEntry`
-    - `GetNoteChangesPageResponse`
-  - `proto/anki/notetypes.proto`:
-    - `NotetypesService.GetNotetypeChangesPage`
-    - `GetNotetypeChangesPageRequest`
-    - `NotetypeChangeEntry`
-    - `GetNotetypeChangesPageResponse`
-- Aligned internal change-entry types for consistency/safety:
-  - `usn`: `sint32` for notes and notetypes
-  - `mtime_secs`: `int64` for notes and notetypes
+### Fixed
+- [launcher] Prevented startup crash on malformed locale data by replacing panic-prone locale detection path.
+- [rslib] Added defensive cursor conversion by clamping `after_usn` (`int64`) to `i32` range before constructing `Usn` (notes + notetypes).
 
-### `pylib/`
-- Added in-process API server lifecycle hooks:
-  - `pylib/rsbridge/lib.rs`:
-    - backend-bound `start_api_server(...)`
-    - backend-bound `stop_api_server(...)`
-  - `pylib/anki/_backend.py`:
-    - Python wrapper methods for server lifecycle
+### Security
+- [api] API keys are no longer read from profile config; API key remains env/runtime supplied (`ANKI_PUBLIC_API_KEY`).
 
-### `qt/`
-- Wired API server lifecycle to profile lifecycle:
-  - `qt/aqt/main.py`: start on profile open, stop on profile close/switch.
+### Docs
+- [docs] Expanded `docs/api-v1.md` with configuration documentation:
+  source precedence, env/profile key tables, startup enable semantics, API key security note, and macOS launcher usage.
 
-### `rslib/`
-- Added storage-layer paged change queries:
-  - `rslib/src/storage/note/get_changes_page.sql`
-  - `rslib/src/storage/notetype/get_changes_page.sql`
-  - `SqliteStorage::get_note_changes_page(...)`
-  - `SqliteStorage::get_notetype_changes_page(...)`
-- Added backend service implementations for paged changes:
-  - `rslib/src/notes/service.rs`: `get_note_changes_page(...)`
-  - `rslib/src/notetype/service.rs`: `get_notetype_changes_page(...)`
-- Changed notes change mapping to remove truncating cast:
-  - `rslib/src/notes/service.rs`: `mtime_secs: mtime_secs.0`
-- Added defensive cursor conversion:
-  - clamp `after_usn` (`int64`) to `i32` range before constructing `Usn`
-  - files: `rslib/src/notes/service.rs`, `rslib/src/notetype/service.rs`
-
-### Follow-up Notes
-- TODOs added in rslib SQL change-page queries for possible composite indexes:
-  - `notes(usn, id)`
-  - `notetypes(usn, id)`
-  - files:
-    - `rslib/src/storage/note/get_changes_page.sql`
-    - `rslib/src/storage/notetype/get_changes_page.sql`
+### Follow-up
+- [rslib] TODOs added in change-page SQL for possible composite indexes:
+  `notes(usn, id)` and `notetypes(usn, id)`.

@@ -1,6 +1,8 @@
 use std::env;
 use std::net::IpAddr;
+use std::path::PathBuf;
 
+use serde::Deserialize;
 use thiserror::Error;
 
 const DEFAULT_HOST: &str = "127.0.0.1";
@@ -19,6 +21,18 @@ pub struct RuntimeOverrides {
 
 #[derive(Clone, Debug, Default)]
 pub struct ProfileConfig {
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub api_key: Option<String>,
+    pub anki_version: Option<String>,
+    pub auth_disabled: Option<bool>,
+    pub allow_non_local: Option<bool>,
+    pub allow_loopback_unauthenticated_health_check: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct FileConfig {
+    pub enabled: Option<bool>,
     pub host: Option<String>,
     pub port: Option<u16>,
     pub api_key: Option<String>,
@@ -47,6 +61,16 @@ pub enum ConfigError {
     InvalidBoolean { key: &'static str, value: String },
     #[error("{key} cannot be empty")]
     EmptyValue { key: &'static str },
+    #[error("failed to read api config file {path}: {source}")]
+    ConfigFileRead {
+        path: String,
+        source: std::io::Error,
+    },
+    #[error("failed to parse api config file {path}: {source}")]
+    ConfigFileParse {
+        path: String,
+        source: toml::de::Error,
+    },
     #[error("api_key is required when auth is enabled")]
     MissingApiKey,
     #[error("non-local bind requires allow_non_local=true")]
@@ -54,41 +78,57 @@ pub enum ConfigError {
 }
 
 impl ServerConfig {
-    pub fn resolve(runtime: RuntimeOverrides, profile: ProfileConfig) -> Result<Self, ConfigError> {
+    pub fn resolve(
+        runtime: RuntimeOverrides,
+        file: FileConfig,
+        profile: ProfileConfig,
+    ) -> Result<Self, ConfigError> {
         let host = pick_value(
             runtime.host,
             env::var("ANKI_PUBLIC_API_HOST").ok(),
+            file.host,
             profile.host,
             DEFAULT_HOST.to_owned(),
         );
-        let port = pick_value(runtime.port, env_port()?, profile.port, DEFAULT_PORT);
+        let port = pick_value(
+            runtime.port,
+            env_port()?,
+            file.port,
+            profile.port,
+            DEFAULT_PORT,
+        );
         let api_key = pick_value(
             runtime.api_key,
             env_api_key()?,
+            file.api_key,
             profile.api_key,
             String::new(),
         );
         let anki_version = pick_value(
             runtime.anki_version,
             env::var("ANKI_PUBLIC_API_ANKI_VERSION").ok(),
+            file.anki_version,
             profile.anki_version,
             String::new(),
         );
         let auth_disabled = pick_value(
             runtime.auth_disabled,
             env_bool("ANKI_PUBLIC_API_AUTH_DISABLED")?,
+            file.auth_disabled,
             profile.auth_disabled,
             false,
         );
         let allow_non_local = pick_value(
             runtime.allow_non_local,
             env_bool("ANKI_PUBLIC_API_ALLOW_NON_LOCAL")?,
+            file.allow_non_local,
             profile.allow_non_local,
             false,
         );
         let allow_loopback_unauthenticated_health_check = pick_value(
             runtime.allow_loopback_unauthenticated_health_check,
             env_bool("ANKI_PUBLIC_API_ALLOW_LOOPBACK_HEALTH_WITHOUT_AUTH")?,
+            file.allow_loopback_unauthenticated_health_check,
             profile.allow_loopback_unauthenticated_health_check,
             false,
         );
@@ -129,6 +169,39 @@ impl ServerConfig {
     }
 }
 
+impl FileConfig {
+    pub fn load_default() -> Result<Self, ConfigError> {
+        let Some(path) = default_config_path() else {
+            return Ok(Self::default());
+        };
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+
+        let content =
+            std::fs::read_to_string(&path).map_err(|source| ConfigError::ConfigFileRead {
+                path: path.display().to_string(),
+                source,
+            })?;
+        let parsed: FileConfigDoc =
+            toml::from_str(&content).map_err(|source| ConfigError::ConfigFileParse {
+                path: path.display().to_string(),
+                source,
+            })?;
+        Ok(parsed.anki_public_api.into())
+    }
+
+    pub fn has_runtime_fields_set(&self) -> bool {
+        self.host.is_some()
+            || self.port.is_some()
+            || self.api_key.is_some()
+            || self.anki_version.is_some()
+            || self.auth_disabled.is_some()
+            || self.allow_non_local.is_some()
+            || self.allow_loopback_unauthenticated_health_check.is_some()
+    }
+}
+
 fn env_port() -> Result<Option<u16>, ConfigError> {
     match env::var("ANKI_PUBLIC_API_PORT") {
         Ok(value) => value
@@ -160,8 +233,14 @@ fn env_api_key() -> Result<Option<String>, ConfigError> {
     }
 }
 
-fn pick_value<T>(runtime: Option<T>, env: Option<T>, profile: Option<T>, default: T) -> T {
-    runtime.or(env).or(profile).unwrap_or(default)
+fn pick_value<T>(
+    runtime: Option<T>,
+    env: Option<T>,
+    file: Option<T>,
+    profile: Option<T>,
+    default: T,
+) -> T {
+    runtime.or(env).or(file).or(profile).unwrap_or(default)
 }
 
 fn is_local_host(host: &str) -> bool {
@@ -172,4 +251,53 @@ fn is_local_host(host: &str) -> bool {
     host.parse::<IpAddr>()
         .map(|ip| ip.is_loopback())
         .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn default_config_path() -> Option<PathBuf> {
+    Some(dirs::config_dir()?.join("Anki2/public-api.toml"))
+}
+
+#[cfg(target_os = "macos")]
+fn default_config_path() -> Option<PathBuf> {
+    Some(dirs::data_dir()?.join("Anki2/public-api.toml"))
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn default_config_path() -> Option<PathBuf> {
+    Some(dirs::data_dir()?.join("Anki2/public-api.toml"))
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct FileConfigDoc {
+    #[serde(default)]
+    anki_public_api: FileConfigToml,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct FileConfigToml {
+    enabled: Option<bool>,
+    host: Option<String>,
+    port: Option<u16>,
+    api_key: Option<String>,
+    anki_version: Option<String>,
+    auth_disabled: Option<bool>,
+    allow_non_local: Option<bool>,
+    allow_loopback_unauthenticated_health_check: Option<bool>,
+}
+
+impl From<FileConfigToml> for FileConfig {
+    fn from(value: FileConfigToml) -> Self {
+        Self {
+            enabled: value.enabled,
+            host: value.host,
+            port: value.port,
+            api_key: value.api_key,
+            anki_version: value.anki_version,
+            auth_disabled: value.auth_disabled,
+            allow_non_local: value.allow_non_local,
+            allow_loopback_unauthenticated_health_check: value
+                .allow_loopback_unauthenticated_health_check,
+        }
+    }
 }

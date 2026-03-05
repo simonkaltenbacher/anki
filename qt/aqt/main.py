@@ -117,6 +117,54 @@ def _env_bool(name: str) -> bool | None:
     return None
 
 
+def _api_server_file_config_status_fallback() -> tuple[bool | None, bool]:
+    if is_win:
+        config_dir = os.environ.get("APPDATA")
+        if not config_dir:
+            return (None, False)
+        path = os.path.join(config_dir, "Anki2", "public-api.toml")
+    elif is_mac:
+        path = os.path.expanduser("~/Library/Application Support/Anki2/public-api.toml")
+    else:
+        path = os.path.expanduser("~/.local/share/Anki2/public-api.toml")
+
+    if not os.path.exists(path):
+        return (None, False)
+
+    enabled: bool | None = None
+    configured = False
+
+    # Backwards-compatible fallback when running against an older rsbridge
+    # without api_server_file_config_status().
+    try:
+        import tomllib
+
+        with open(path, "rb") as f:
+            doc = tomllib.load(f)
+        section = doc.get("anki_public_api")
+        if isinstance(section, dict):
+            raw_enabled = section.get("enabled")
+            if isinstance(raw_enabled, bool):
+                enabled = raw_enabled
+            configured = any(
+                section.get(key) is not None
+                for key in (
+                    "host",
+                    "port",
+                    "api_key",
+                    "anki_version",
+                    "auth_disabled",
+                    "allow_non_local",
+                    "allow_loopback_unauthenticated_health_check",
+                )
+            )
+    except Exception:
+        # If parsing fails in fallback mode, file presence still indicates intent.
+        configured = True
+
+    return (enabled, configured)
+
+
 class MainWebView(AnkiWebView):
     def __init__(self, mw: AnkiQt) -> None:
         AnkiWebView.__init__(self, kind=AnkiWebViewKind.MAIN)
@@ -599,7 +647,8 @@ class AnkiQt(QMainWindow):
 
         # at this point there should be no windows left
         self._checkForUnclosedWidgets()
-        self._reviewer_refresh_timer.deleteLater()
+        if hasattr(self, "_reviewer_refresh_timer"):
+            self._reviewer_refresh_timer.deleteLater()
 
     def _checkForUnclosedWidgets(self) -> None:
         for w in self.app.topLevelWidgets():
@@ -759,10 +808,75 @@ class AnkiQt(QMainWindow):
             showWarning(tr.qt_misc_your_collection_file_appears_to_be())
 
     def _start_api_server(self) -> None:
-        enabled = _env_bool("ANKI_PUBLIC_API_ENABLED")
-        if enabled is False:
+        profile = self.pm.profile or {}
+
+        def profile_bool(name: str) -> bool | None:
+            value = profile.get(name)
+            if isinstance(value, bool):
+                return value
+            return None
+
+        def profile_int(name: str) -> int | None:
+            value = profile.get(name)
+            if isinstance(value, int) and value > 0:
+                return value
+            return None
+
+        def profile_str(name: str) -> str | None:
+            value = profile.get(name)
+            if isinstance(value, str):
+                value = value.strip()
+                if value:
+                    return value
+            return None
+
+        profile_anki_public_api_enabled = profile_bool("anki_public_api_enabled")
+        env_anki_public_api_enabled = _env_bool("ANKI_PUBLIC_API_ENABLED")
+        if hasattr(self.backend, "api_server_file_config_status"):
+            file_anki_public_api_enabled, file_configured = (
+                self.backend.api_server_file_config_status()
+            )
+        else:
+            file_anki_public_api_enabled, file_configured = (
+                _api_server_file_config_status_fallback()
+            )
+        api_server_enabled = (
+            env_anki_public_api_enabled
+            if env_anki_public_api_enabled is not None
+            else (
+                profile_anki_public_api_enabled
+                if profile_anki_public_api_enabled is not None
+                else (
+                    file_anki_public_api_enabled
+                    if file_anki_public_api_enabled is not None
+                    else False
+                )
+            )
+        )
+        profile_host = profile_str("anki_public_api_host")
+        profile_port = profile_int("anki_public_api_port")
+        profile_auth_disabled = profile_bool("anki_public_api_auth_disabled")
+        profile_allow_non_local = profile_bool("anki_public_api_allow_non_local")
+        profile_allow_loopback_unauthenticated_health_check = profile_bool(
+            "anki_public_api_allow_loopback_unauthenticated_health_check"
+        )
+        profile_configured = any(
+            value is not None
+            for value in (
+                profile_host,
+                profile_port,
+                profile_auth_disabled,
+                profile_allow_non_local,
+                profile_allow_loopback_unauthenticated_health_check,
+            )
+        )
+        if api_server_enabled is False and (
+            env_anki_public_api_enabled is not None
+            or profile_anki_public_api_enabled is not None
+            or file_anki_public_api_enabled is not None
+        ):
             return
-        if enabled is None and "ANKI_PUBLIC_API_KEY" not in os.environ and "ANKI_PUBLIC_API_AUTH_DISABLED" not in os.environ:
+        if not api_server_enabled and not profile_configured and not file_configured:
             return
 
         host = os.environ.get("ANKI_PUBLIC_API_HOST") or None
@@ -786,6 +900,14 @@ class AnkiQt(QMainWindow):
                 allow_non_local=_env_bool("ANKI_PUBLIC_API_ALLOW_NON_LOCAL"),
                 allow_loopback_unauthenticated_health_check=_env_bool(
                     "ANKI_PUBLIC_API_ALLOW_LOOPBACK_HEALTH_WITHOUT_AUTH"
+                ),
+                profile_host=profile_host,
+                profile_port=profile_port,
+                profile_anki_version=anki.buildinfo.version,
+                profile_auth_disabled=profile_auth_disabled,
+                profile_allow_non_local=profile_allow_non_local,
+                profile_allow_loopback_unauthenticated_health_check=(
+                    profile_allow_loopback_unauthenticated_health_check
                 ),
             )
         except Exception:

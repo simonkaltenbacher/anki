@@ -5,10 +5,12 @@ use anki::backend::init_backend;
 use anki::backend::Backend as RustBackend;
 use anki::log::set_global_logger;
 use anki::sync::http_server::SimpleServer;
+use anki_api::config::FileConfig;
 use anki_api::config::ProfileConfig;
 use anki_api::config::RuntimeOverrides;
 use anki_api::config::ServerConfig;
 use anki_api::grpc;
+use anki_api::logging;
 use anki_api::store;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
@@ -65,6 +67,12 @@ fn open_backend(init_msg: &Bound<'_, PyBytes>) -> PyResult<Backend> {
 
 #[pymethods]
 impl Backend {
+    fn api_server_file_config_status(&self) -> PyResult<(Option<bool>, bool)> {
+        let file_config =
+            FileConfig::load_default().map_err(|err| PyException::new_err(err.to_string()))?;
+        Ok((file_config.enabled, file_config.has_runtime_fields_set()))
+    }
+
     #[pyo3(signature = (
         host=None,
         port=None,
@@ -72,7 +80,13 @@ impl Backend {
         anki_version=None,
         auth_disabled=None,
         allow_non_local=None,
-        allow_loopback_unauthenticated_health_check=None
+        allow_loopback_unauthenticated_health_check=None,
+        profile_host=None,
+        profile_port=None,
+        profile_anki_version=None,
+        profile_auth_disabled=None,
+        profile_allow_non_local=None,
+        profile_allow_loopback_unauthenticated_health_check=None
     ))]
     fn start_api_server(
         &self,
@@ -83,6 +97,12 @@ impl Backend {
         auth_disabled: Option<bool>,
         allow_non_local: Option<bool>,
         allow_loopback_unauthenticated_health_check: Option<bool>,
+        profile_host: Option<String>,
+        profile_port: Option<u16>,
+        profile_anki_version: Option<String>,
+        profile_auth_disabled: Option<bool>,
+        profile_allow_non_local: Option<bool>,
+        profile_allow_loopback_unauthenticated_health_check: Option<bool>,
     ) -> PyResult<()> {
         let mut guard = self
             .api_server
@@ -92,6 +112,8 @@ impl Backend {
             return Err(PyException::new_err("anki api server is already running"));
         }
 
+        let file_config =
+            FileConfig::load_default().map_err(|err| PyException::new_err(err.to_string()))?;
         let config = ServerConfig::resolve(
             RuntimeOverrides {
                 host,
@@ -102,9 +124,20 @@ impl Backend {
                 allow_non_local,
                 allow_loopback_unauthenticated_health_check,
             },
-            ProfileConfig::default(),
+            file_config,
+            ProfileConfig {
+                host: profile_host,
+                port: profile_port,
+                api_key: None,
+                anki_version: profile_anki_version,
+                auth_disabled: profile_auth_disabled,
+                allow_non_local: profile_allow_non_local,
+                allow_loopback_unauthenticated_health_check:
+                    profile_allow_loopback_unauthenticated_health_check,
+            },
         )
         .map_err(|err| PyException::new_err(err.to_string()))?;
+        logging::init_stderr_logging();
 
         let store = store::shared_store_from_backend(self.backend.clone());
         let (shutdown_tx, shutdown_rx) = oneshot::channel();

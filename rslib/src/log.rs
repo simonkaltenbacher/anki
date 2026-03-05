@@ -18,6 +18,10 @@ use crate::prelude::*;
 
 const LOG_ROTATE_BYTES: u64 = 50 * 1024 * 1024;
 
+fn default_env_filter() -> EnvFilter {
+    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("anki_api=info"))
+}
+
 /// Enable logging to the console, and optionally also to a file.
 pub fn set_global_logger(path: Option<&str>) -> Result<()> {
     if std::env::var("BURN_LOG").is_ok() {
@@ -33,7 +37,7 @@ pub fn set_global_logger(path: Option<&str>) -> Result<()> {
         let subscriber = tracing_subscriber::registry()
             .with(fmt::layer().with_target(false))
             .with(file_writer)
-            .with(EnvFilter::from_default_env());
+            .with(default_env_filter());
         set_global_default(subscriber).or_invalid("global subscriber already set")?;
         Ok(())
     })?;
