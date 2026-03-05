@@ -48,7 +48,7 @@ impl ApiKeyAuthenticator {
 
         self.validate_authorization_header(request.metadata())
             .map_err(|err| {
-                tracing::warn!(error = %err, "authentication failed");
+                tracing::debug!(error = %err, "authentication failed");
                 Status::unauthenticated(err.to_string())
             })
     }

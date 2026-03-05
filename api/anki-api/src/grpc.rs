@@ -157,7 +157,7 @@ where
                             .get("grpc-status")
                             .and_then(|value| value.to_str().ok())
                             .unwrap_or("0");
-                        tracing::info!(
+                        tracing::debug!(
                             latency_ms = latency.as_millis() as u64,
                             grpc_status = grpc_status,
                             "grpc request completed"
