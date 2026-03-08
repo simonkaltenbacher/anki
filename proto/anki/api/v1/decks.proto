@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package anki.api.v1;
+
+// Read-only deck lookup APIs.
+service DecksService {
+  // Lists lightweight deck references (ID + name).
+  rpc ListDeckRefs(ListDeckRefsRequest) returns (ListDeckRefsResponse);
+  // Resolves one exact human deck name to a stable deck ID.
+  rpc GetDeckIdByName(GetDeckIdByNameRequest) returns (GetDeckIdByNameResponse);
+}
+
+message ListDeckRefsRequest {}
+
+message DeckRef {
+  int64 deck_id = 1;
+  string name = 2;
+}
+
+message ListDeckRefsResponse {
+  repeated DeckRef decks = 1;
+}
+
+message GetDeckIdByNameRequest {
+  string name = 1;
+}
+
+message GetDeckIdByNameResponse {
+  int64 deck_id = 1;
+}

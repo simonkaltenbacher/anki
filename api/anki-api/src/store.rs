@@ -9,15 +9,19 @@ use anki_proto::backend::BackendInit;
 use anki_proto::backend::backend_error::Kind as BackendErrorKind;
 use anki_proto::collection::OpChanges;
 use anki_proto::collection::OpenCollectionRequest;
+use anki_proto::decks::DeckId;
+use anki_proto::decks::DeckNames;
+use anki_proto::decks::GetDeckNamesRequest;
+use anki_proto::generic::String as GenericString;
+use anki_proto::notes::AddNoteRequest;
+use anki_proto::notes::AddNoteResponse;
 use anki_proto::notes::GetNoteChangesPageRequest;
 use anki_proto::notes::GetNoteChangesPageResponse;
 use anki_proto::notes::Note;
 use anki_proto::notes::NoteId;
 use anki_proto::notes::UpdateNotesRequest;
 #[cfg(test)]
-use anki_proto::notes::{
-    AddNoteRequest, AddNoteResponse, DeckAndNotetype, DefaultsForAddingRequest,
-};
+use anki_proto::notes::{DeckAndNotetype, DefaultsForAddingRequest};
 use anki_proto::notetypes::GetNotetypeChangesPageRequest;
 use anki_proto::notetypes::GetNotetypeChangesPageResponse;
 use anki_proto::notetypes::Notetype;
@@ -36,6 +40,7 @@ use tonic::Status;
 const SERVICE_NOTETYPES: u32 = 23;
 const SERVICE_NOTES: u32 = 25;
 const SERVICE_SEARCH: u32 = 29;
+const SERVICE_DECKS: u32 = 7;
 
 // Method indices are derived from RPC declaration order in each service proto:
 // - SERVICE_NOTETYPES: `proto/anki/notetypes.proto`
@@ -45,15 +50,15 @@ const METHOD_NOTETYPES_GET: u32 = 6;
 const METHOD_NOTETYPES_GET_NAMES: u32 = 8;
 const METHOD_NOTETYPES_GET_ID_BY_NAME: u32 = 10;
 const METHOD_NOTETYPES_UPDATE: u32 = 1;
-#[cfg(test)]
 const METHOD_NOTES_NEW: u32 = 0;
-#[cfg(test)]
 const METHOD_NOTES_ADD: u32 = 1;
 #[cfg(test)]
 const METHOD_NOTES_DEFAULTS_FOR_ADDING: u32 = 3;
 const METHOD_NOTES_UPDATE: u32 = 5;
 const METHOD_NOTES_GET: u32 = 6;
 const METHOD_NOTES_GET_CHANGES_PAGE: u32 = 14;
+const METHOD_DECKS_GET_ID_BY_NAME: u32 = 7;
+const METHOD_DECKS_GET_NAMES: u32 = 13;
 const METHOD_SEARCH_NOTES: u32 = 2;
 const METHOD_NOTETYPES_GET_CHANGES_PAGE: u32 = 19;
 
@@ -133,11 +138,40 @@ impl BackendStore {
         let response: NotetypeId = self.run_method(
             SERVICE_NOTETYPES,
             METHOD_NOTETYPES_GET_ID_BY_NAME,
-            Some(anki_proto::generic::String {
+            Some(GenericString {
                 val: name.to_owned(),
             }),
         )?;
         Ok(response.ntid)
+    }
+
+    pub fn get_deck_id_by_name(&self, name: &str) -> Result<i64, Status> {
+        let response: DeckId = self.run_method(
+            SERVICE_DECKS,
+            METHOD_DECKS_GET_ID_BY_NAME,
+            Some(GenericString {
+                val: name.to_owned(),
+            }),
+        )?;
+        Ok(response.did)
+    }
+
+    pub fn list_deck_refs(&self) -> Result<Vec<(i64, String)>, Status> {
+        let response: DeckNames = self.run_method(
+            SERVICE_DECKS,
+            METHOD_DECKS_GET_NAMES,
+            Some(GetDeckNamesRequest {
+                skip_empty_default: false,
+                include_filtered: true,
+            }),
+        )?;
+        let mut refs: Vec<(i64, String)> = response
+            .entries
+            .into_iter()
+            .map(|entry| (entry.id, entry.name))
+            .collect();
+        refs.sort_by_key(|(id, _name)| *id);
+        Ok(refs)
     }
 
     pub fn update_note_fields(&self, mut note: Note, fields: Vec<String>) -> Result<Note, Status> {
@@ -154,6 +188,31 @@ impl BackendStore {
         )?;
 
         self.get_note(note_id)
+    }
+
+    pub fn create_note(
+        &self,
+        notetype_id: i64,
+        deck_id: i64,
+        fields: Vec<String>,
+    ) -> Result<Note, Status> {
+        let mut note: Note = self.run_method(
+            SERVICE_NOTES,
+            METHOD_NOTES_NEW,
+            Some(NotetypeId { ntid: notetype_id }),
+        )?;
+        note.fields = fields;
+
+        let added: AddNoteResponse = self.run_method(
+            SERVICE_NOTES,
+            METHOD_NOTES_ADD,
+            Some(AddNoteRequest {
+                note: Some(note),
+                deck_id,
+            }),
+        )?;
+
+        self.get_note(added.note_id)
     }
 
     pub fn update_notetype(&self, notetype: Notetype) -> Result<(), Status> {

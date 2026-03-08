@@ -6,6 +6,7 @@ use std::sync::mpsc::Sender;
 use std::time::Duration;
 use std::{future::Future, future::pending};
 
+use anki_api_proto::anki::api::v1::decks_service_server::DecksServiceServer;
 use anki_api_proto::anki::api::v1::health_service_server::HealthServiceServer;
 use anki_api_proto::anki::api::v1::notes_service_server::NotesServiceServer;
 use anki_api_proto::anki::api::v1::notetypes_service_server::NotetypesServiceServer;
@@ -24,6 +25,7 @@ use tracing::Span;
 
 use crate::auth::ApiKeyAuthenticator;
 use crate::config::ServerConfig;
+use crate::service::decks::DecksApi;
 use crate::service::health::HealthApi;
 use crate::service::notes::NotesApi;
 use crate::service::notetypes::NotetypesApi;
@@ -102,6 +104,14 @@ where
             Ok(request)
         });
 
+    let decks_auth = Arc::clone(&auth);
+    let decks_api = DecksApi::new(Arc::clone(&store));
+    let decks_service =
+        DecksServiceServer::with_interceptor(decks_api, move |request: Request<()>| {
+            decks_auth.authenticate(&request, false)?;
+            Ok(request)
+        });
+
     let notetypes_auth = Arc::clone(&auth);
     let notetypes_api = NotetypesApi::new(Arc::clone(&store));
     let notetypes_service =
@@ -175,6 +185,7 @@ where
         .add_service(standard_health_service)
         .add_service(health_service)
         .add_service(system_service)
+        .add_service(decks_service)
         .add_service(notes_service)
         .add_service(notetypes_service)
         .serve_with_incoming_shutdown(TcpListenerStream::new(listener), shutdown_signal)
@@ -200,8 +211,11 @@ fn configured_capabilities(config: &ServerConfig) -> Vec<String> {
     let mut capabilities = vec![
         "health.check".to_owned(),
         "system.server_info".to_owned(),
+        "decks.list_refs".to_owned(),
+        "decks.get_id_by_name".to_owned(),
         "notes.get".to_owned(),
         "notes.get.batch".to_owned(),
+        "notes.create".to_owned(),
         "notes.list_refs.stream".to_owned(),
         "notes.list.stream".to_owned(),
         "notes.update_fields".to_owned(),

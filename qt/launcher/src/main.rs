@@ -4,8 +4,8 @@
 #![windows_subsystem = "windows"]
 
 use std::io::stdin;
-use std::io::IsTerminal;
 use std::io::stdout;
+use std::io::IsTerminal;
 use std::io::Write;
 use std::process::Command;
 use std::time::SystemTime;

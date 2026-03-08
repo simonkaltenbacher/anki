@@ -9,6 +9,8 @@ service NotesService {
   rpc GetNote(GetNoteRequest) returns (GetNoteResponse);
   // Gets multiple notes by ID, in request order.
   rpc GetNotes(GetNotesRequest) returns (GetNotesResponse);
+  // Creates a new note in the provided deck using named field values.
+  rpc CreateNote(CreateNoteRequest) returns (CreateNoteResponse);
   // Streams lightweight note references (id + sort field), optionally filtered.
   rpc ListNoteRefs(ListNoteRefsRequest) returns (stream ListNoteRefsResponse);
   // Streams note payloads, optionally filtered by a backend search query.
@@ -65,6 +67,22 @@ message GetNotesRequest {
 
 message GetNotesResponse {
   repeated Note notes = 1;
+}
+
+message CreateNoteRequest {
+  int64 notetype_id = 1;
+  oneof deck {
+    // Internal deck ID.
+    int64 deck_id = 2;
+    // Human-readable deck name, for example "Default" or "Parent::Child".
+    string deck_name = 3;
+  }
+  // Full field payload, matched by name against the notetype.
+  repeated NoteFieldUpdate fields = 4;
+}
+
+message CreateNoteResponse {
+  Note note = 1;
 }
 
 message ListNoteRefsRequest {

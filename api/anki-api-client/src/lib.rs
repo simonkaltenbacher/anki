@@ -14,6 +14,7 @@
 //! - Unknown capability strings are ignored for forward compatibility.
 
 pub use anki_api_proto::anki::api::v1;
+pub use anki_api_proto::anki::api::v1::create_note_request;
 
 use std::collections::HashSet;
 use std::pin::Pin;
@@ -34,6 +35,10 @@ use tonic::Streaming;
 ///
 /// Prefer [`ApiClient`] for auth injection, capability bootstrap, and typed errors.
 pub type HealthClient = v1::health_service_client::HealthServiceClient<tonic::transport::Channel>;
+/// Raw tonic client for `DecksService`.
+///
+/// Prefer [`ApiClient`] for auth injection, capability bootstrap, and typed errors.
+pub type DecksClient = v1::decks_service_client::DecksServiceClient<tonic::transport::Channel>;
 /// Raw tonic client for `SystemService`.
 ///
 /// Prefer [`ApiClient`] for auth injection, capability bootstrap, and typed errors.
@@ -62,8 +67,11 @@ pub mod error_codes {
 pub enum Capability {
     HealthCheck,
     SystemServerInfo,
+    DecksListRefs,
+    DecksGetIdByName,
     NotesGet,
     NotesGetBatch,
+    NotesCreate,
     NotesListRefsStream,
     NotesListStream,
     NotesUpdateFields,
@@ -90,8 +98,11 @@ impl Capability {
         match value {
             "health.check" => Some(Self::HealthCheck),
             "system.server_info" => Some(Self::SystemServerInfo),
+            "decks.list_refs" => Some(Self::DecksListRefs),
+            "decks.get_id_by_name" => Some(Self::DecksGetIdByName),
             "notes.get" => Some(Self::NotesGet),
             "notes.get.batch" => Some(Self::NotesGetBatch),
+            "notes.create" => Some(Self::NotesCreate),
             "notes.list_refs.stream" => Some(Self::NotesListRefsStream),
             "notes.list.stream" => Some(Self::NotesListStream),
             "notes.update_fields" => Some(Self::NotesUpdateFields),
@@ -279,6 +290,30 @@ impl ApiClient {
         Ok(self.server_info.clone())
     }
 
+    /// Lists lightweight deck references (ID + name).
+    pub async fn list_deck_refs(&self) -> Result<v1::ListDeckRefsResponse, ClientError> {
+        let mut client = DecksClient::new(self.channel.clone());
+        let request = self.request(v1::ListDeckRefsRequest {})?;
+        let response = client
+            .list_deck_refs(request)
+            .await
+            .map_err(Self::map_status)?
+            .into_inner();
+        Ok(response)
+    }
+
+    /// Resolves one exact human deck name to a stable deck ID.
+    pub async fn get_deck_id_by_name(&self, name: impl Into<String>) -> Result<i64, ClientError> {
+        let mut client = DecksClient::new(self.channel.clone());
+        let request = self.request(v1::GetDeckIdByNameRequest { name: name.into() })?;
+        let response = client
+            .get_deck_id_by_name(request)
+            .await
+            .map_err(Self::map_status)?
+            .into_inner();
+        Ok(response.deck_id)
+    }
+
     /// Returns parsed typed capabilities advertised by server.
     pub fn capabilities(&self) -> &CapabilitySet {
         &self.capabilities
@@ -311,6 +346,57 @@ impl ApiClient {
             .map_err(Self::map_status)?
             .into_inner();
         Ok(response)
+    }
+
+    /// Creates one note in the provided deck using a complete named field payload.
+    pub async fn create_note(
+        &self,
+        notetype_id: i64,
+        deck: v1::create_note_request::Deck,
+        fields: Vec<v1::NoteFieldUpdate>,
+    ) -> Result<v1::CreateNoteResponse, ClientError> {
+        let mut client = NotesClient::new(self.channel.clone());
+        let request = self.request(v1::CreateNoteRequest {
+            notetype_id,
+            deck: Some(deck),
+            fields,
+        })?;
+        let response = client
+            .create_note(request)
+            .await
+            .map_err(Self::map_status)?
+            .into_inner();
+        Ok(response)
+    }
+
+    /// Creates one note addressed by human-readable deck name.
+    pub async fn create_note_in_deck_name(
+        &self,
+        notetype_id: i64,
+        deck_name: impl Into<String>,
+        fields: Vec<v1::NoteFieldUpdate>,
+    ) -> Result<v1::CreateNoteResponse, ClientError> {
+        self.create_note(
+            notetype_id,
+            v1::create_note_request::Deck::DeckName(deck_name.into()),
+            fields,
+        )
+        .await
+    }
+
+    /// Creates one note addressed by internal deck ID.
+    pub async fn create_note_in_deck_id(
+        &self,
+        notetype_id: i64,
+        deck_id: i64,
+        fields: Vec<v1::NoteFieldUpdate>,
+    ) -> Result<v1::CreateNoteResponse, ClientError> {
+        self.create_note(
+            notetype_id,
+            v1::create_note_request::Deck::DeckId(deck_id),
+            fields,
+        )
+        .await
     }
 
     /// Streams note references, optionally filtered by backend search query.
@@ -722,6 +808,16 @@ mod tests {
     }
 
     #[test]
+    fn parses_deck_capabilities() {
+        let caps = parse_capabilities(&[
+            "decks.list_refs".to_owned(),
+            "decks.get_id_by_name".to_owned(),
+        ]);
+        assert!(caps.has(Capability::DecksListRefs));
+        assert!(caps.has(Capability::DecksGetIdByName));
+    }
+
+    #[test]
     fn parses_notetype_list_refs_capability() {
         let caps = parse_capabilities(&["notetypes.list_refs".to_owned()]);
         assert!(caps.has(Capability::NotetypesListRefs));
@@ -735,6 +831,12 @@ mod tests {
         ]);
         assert!(caps.has(Capability::NotesGetBatch));
         assert!(caps.has(Capability::NotetypesGetBatch));
+    }
+
+    #[test]
+    fn parses_notes_create_capability() {
+        let caps = parse_capabilities(&["notes.create".to_owned()]);
+        assert!(caps.has(Capability::NotesCreate));
     }
 
     #[test]

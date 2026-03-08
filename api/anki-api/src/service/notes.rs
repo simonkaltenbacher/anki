@@ -6,6 +6,8 @@ use std::task::Poll;
 
 use anki_api_proto::anki::api::v1::CountNotesRequest;
 use anki_api_proto::anki::api::v1::CountNotesResponse;
+use anki_api_proto::anki::api::v1::CreateNoteRequest;
+use anki_api_proto::anki::api::v1::CreateNoteResponse;
 use anki_api_proto::anki::api::v1::GetNoteChangesRequest;
 use anki_api_proto::anki::api::v1::GetNoteChangesResponse;
 use anki_api_proto::anki::api::v1::GetNoteRequest;
@@ -23,6 +25,7 @@ use anki_api_proto::anki::api::v1::UpdateNoteFieldsBatchRequest;
 use anki_api_proto::anki::api::v1::UpdateNoteFieldsBatchResponse;
 use anki_api_proto::anki::api::v1::UpdateNoteFieldsRequest;
 use anki_api_proto::anki::api::v1::UpdateNoteFieldsResponse;
+use anki_api_proto::anki::api::v1::create_note_request::Deck;
 use anki_api_proto::anki::api::v1::notes_service_server::NotesService;
 use futures::Stream;
 use tokio::sync::mpsc;
@@ -112,6 +115,15 @@ impl NotesService for NotesApi {
         }
 
         Ok(Response::new(GetNotesResponse { notes }))
+    }
+
+    async fn create_note(
+        &self,
+        request: Request<CreateNoteRequest>,
+    ) -> Result<Response<CreateNoteResponse>, Status> {
+        let mut notetype_cache = NotetypeCache::default();
+        let response = create_note_inner(&self.store, request.into_inner(), &mut notetype_cache)?;
+        Ok(Response::new(response))
     }
 
     async fn list_note_refs(
@@ -344,6 +356,87 @@ fn update_note_fields_inner(
     let updated_notetype = notetype_cache.get_or_load(store, note.notetype_id)?;
 
     Ok(UpdateNoteFieldsResponse {
+        note: Some(adapter::map_note(&note, &updated_notetype)?),
+    })
+}
+
+fn create_note_inner(
+    store: &SharedStore,
+    request: CreateNoteRequest,
+    notetype_cache: &mut NotetypeCache,
+) -> Result<CreateNoteResponse, Status> {
+    if request.notetype_id <= 0 {
+        return Err(Status::invalid_argument("notetype_id must be > 0"));
+    }
+
+    let notetype = notetype_cache.get_or_load(store, request.notetype_id)?;
+    let ordered_fields = adapter::ordered_notetype_fields(&notetype, notetype.fields.len())?;
+    let expected_field_count = ordered_fields.len();
+    if request.fields.len() != expected_field_count {
+        return Err(Status::invalid_argument(format!(
+            "fields must contain exactly {expected_field_count} entries for notetype_id={}",
+            request.notetype_id
+        )));
+    }
+
+    let name_to_ordinal: HashMap<&str, usize> = ordered_fields
+        .iter()
+        .map(|field| (field.name.as_str(), field.ordinal))
+        .collect();
+    let mut fields = vec![None; expected_field_count];
+    for field in request.fields {
+        let ordinal = name_to_ordinal.get(field.name.as_str()).ok_or_else(|| {
+            Status::invalid_argument(format!(
+                "field '{}' not found in notetype_id={}",
+                field.name, request.notetype_id
+            ))
+        })?;
+        fields[*ordinal] = Some(field.value);
+    }
+
+    let missing_fields = ordered_fields
+        .iter()
+        .filter(|field| fields[field.ordinal].is_none())
+        .map(|field| field.name.clone())
+        .collect::<Vec<_>>();
+    if !missing_fields.is_empty() {
+        return Err(Status::invalid_argument(format!(
+            "missing field values for notetype_id={}: {}",
+            request.notetype_id,
+            missing_fields.join(", ")
+        )));
+    }
+
+    let deck_id = match request.deck {
+        Some(Deck::DeckId(deck_id)) => {
+            if deck_id <= 0 {
+                return Err(Status::invalid_argument("deck_id must be > 0"));
+            }
+            deck_id
+        }
+        Some(Deck::DeckName(deck_name)) => {
+            if deck_name.trim().is_empty() {
+                return Err(Status::invalid_argument("deck_name must not be empty"));
+            }
+            store.get_deck_id_by_name(&deck_name)?
+        }
+        None => {
+            return Err(Status::invalid_argument(
+                "exactly one deck selector must be provided",
+            ));
+        }
+    };
+    let note = store.create_note(
+        request.notetype_id,
+        deck_id,
+        fields
+            .into_iter()
+            .map(|value| value.expect("missing fields rejected above"))
+            .collect(),
+    )?;
+    let updated_notetype = notetype_cache.get_or_load(store, note.notetype_id)?;
+
+    Ok(CreateNoteResponse {
         note: Some(adapter::map_note(&note, &updated_notetype)?),
     })
 }
@@ -608,6 +701,255 @@ mod tests {
         assert!(metadata.usn >= i64::from(note.usn));
         let sort_field = metadata.sort_field.as_ref().expect("sort field");
         assert_eq!(sort_field.value, "patched-front");
+    }
+
+    #[tokio::test]
+    async fn create_note_returns_created_note_with_sort_field_and_usn() {
+        let fixture = TestStore::new("notes-create-success");
+        let store = fixture.store();
+        let api = NotesApi::new(store.clone());
+        let notetype_id = store
+            .get_notetype_id_by_name("Basic")
+            .expect("basic notetype");
+
+        let response = <NotesApi as NotesService>::create_note(
+            &api,
+            Request::new(CreateNoteRequest {
+                notetype_id,
+                deck: Some(Deck::DeckName("Default".to_owned())),
+                fields: vec![
+                    NoteFieldUpdate {
+                        name: "Front".to_owned(),
+                        value: "created-front".to_owned(),
+                    },
+                    NoteFieldUpdate {
+                        name: "Back".to_owned(),
+                        value: "created-back".to_owned(),
+                    },
+                ],
+            }),
+        )
+        .await
+        .expect("create note")
+        .into_inner()
+        .note
+        .expect("note response");
+
+        assert!(response.note_id > 0);
+        assert_eq!(response.notetype_id, notetype_id);
+        assert_eq!(response.fields.len(), 2);
+        assert_eq!(response.fields[0].name, "Front");
+        assert_eq!(response.fields[0].value, "created-front");
+        assert_eq!(response.fields[1].name, "Back");
+        assert_eq!(response.fields[1].value, "created-back");
+        let sort_field = response.sort_field.as_ref().expect("sort field");
+        assert_eq!(sort_field.name, "Front");
+        assert_eq!(sort_field.value, "created-front");
+    }
+
+    #[tokio::test]
+    async fn create_note_rejects_missing_named_fields() {
+        let fixture = TestStore::new("notes-create-missing-fields");
+        let store = fixture.store();
+        let api = NotesApi::new(store.clone());
+        let notetype_id = store
+            .get_notetype_id_by_name("Basic")
+            .expect("basic notetype");
+
+        let status = <NotesApi as NotesService>::create_note(
+            &api,
+            Request::new(CreateNoteRequest {
+                notetype_id,
+                deck: Some(Deck::DeckName("Default".to_owned())),
+                fields: vec![NoteFieldUpdate {
+                    name: "Front".to_owned(),
+                    value: "created-front".to_owned(),
+                }],
+            }),
+        )
+        .await
+        .expect_err("missing field should fail");
+
+        assert_eq!(status.code(), Code::InvalidArgument);
+        assert!(status.message().contains("exactly 2 entries"));
+    }
+
+    #[tokio::test]
+    async fn create_note_rejects_unknown_field_name() {
+        let fixture = TestStore::new("notes-create-unknown-field");
+        let store = fixture.store();
+        let api = NotesApi::new(store.clone());
+        let notetype_id = store
+            .get_notetype_id_by_name("Basic")
+            .expect("basic notetype");
+
+        let status = <NotesApi as NotesService>::create_note(
+            &api,
+            Request::new(CreateNoteRequest {
+                notetype_id,
+                deck: Some(Deck::DeckName("Default".to_owned())),
+                fields: vec![
+                    NoteFieldUpdate {
+                        name: "Front".to_owned(),
+                        value: "created-front".to_owned(),
+                    },
+                    NoteFieldUpdate {
+                        name: "Unknown".to_owned(),
+                        value: "created-back".to_owned(),
+                    },
+                ],
+            }),
+        )
+        .await
+        .expect_err("unknown field should fail");
+
+        assert_eq!(status.code(), Code::InvalidArgument);
+        assert!(status.message().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn create_note_surfaces_deck_not_found() {
+        let fixture = TestStore::new("notes-create-missing-deck");
+        let store = fixture.store();
+        let api = NotesApi::new(store.clone());
+        let notetype_id = store
+            .get_notetype_id_by_name("Basic")
+            .expect("basic notetype");
+
+        let status = <NotesApi as NotesService>::create_note(
+            &api,
+            Request::new(CreateNoteRequest {
+                notetype_id,
+                deck: Some(Deck::DeckName("Does Not Exist".to_owned())),
+                fields: vec![
+                    NoteFieldUpdate {
+                        name: "Front".to_owned(),
+                        value: "created-front".to_owned(),
+                    },
+                    NoteFieldUpdate {
+                        name: "Back".to_owned(),
+                        value: "created-back".to_owned(),
+                    },
+                ],
+            }),
+        )
+        .await
+        .expect_err("missing deck should fail");
+
+        assert_eq!(status.code(), Code::NotFound);
+        assert!(
+            status.message().contains("Does Not Exist"),
+            "unexpected message: {}",
+            status.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn create_note_allows_empty_field_values_when_backend_accepts_them() {
+        let fixture = TestStore::new("notes-create-empty-field");
+        let store = fixture.store();
+        let api = NotesApi::new(store.clone());
+        let notetype_id = store
+            .get_notetype_id_by_name("Basic")
+            .expect("basic notetype");
+
+        let response = <NotesApi as NotesService>::create_note(
+            &api,
+            Request::new(CreateNoteRequest {
+                notetype_id,
+                deck: Some(Deck::DeckName("Default".to_owned())),
+                fields: vec![
+                    NoteFieldUpdate {
+                        name: "Front".to_owned(),
+                        value: String::new(),
+                    },
+                    NoteFieldUpdate {
+                        name: "Back".to_owned(),
+                        value: "created-back".to_owned(),
+                    },
+                ],
+            }),
+        )
+        .await
+        .expect("empty field values should pass through when backend accepts them")
+        .into_inner()
+        .note
+        .expect("note response");
+
+        assert_eq!(response.fields[0].name, "Front");
+        assert_eq!(response.fields[0].value, "");
+        assert_eq!(response.fields[1].name, "Back");
+        assert_eq!(response.fields[1].value, "created-back");
+    }
+
+    #[tokio::test]
+    async fn create_note_accepts_deck_id_selector() {
+        let fixture = TestStore::new("notes-create-deck-id");
+        let store = fixture.store();
+        let api = NotesApi::new(store.clone());
+        let notetype_id = store
+            .get_notetype_id_by_name("Basic")
+            .expect("basic notetype");
+        let deck_id = store.get_deck_id_by_name("Default").expect("default deck");
+
+        let response = <NotesApi as NotesService>::create_note(
+            &api,
+            Request::new(CreateNoteRequest {
+                notetype_id,
+                deck: Some(Deck::DeckId(deck_id)),
+                fields: vec![
+                    NoteFieldUpdate {
+                        name: "Front".to_owned(),
+                        value: "created-front".to_owned(),
+                    },
+                    NoteFieldUpdate {
+                        name: "Back".to_owned(),
+                        value: "created-back".to_owned(),
+                    },
+                ],
+            }),
+        )
+        .await
+        .expect("create note by deck id")
+        .into_inner()
+        .note
+        .expect("note response");
+
+        assert!(response.note_id > 0);
+        assert_eq!(response.notetype_id, notetype_id);
+    }
+
+    #[tokio::test]
+    async fn create_note_requires_deck_selector() {
+        let fixture = TestStore::new("notes-create-missing-deck-selector");
+        let store = fixture.store();
+        let api = NotesApi::new(store.clone());
+        let notetype_id = store
+            .get_notetype_id_by_name("Basic")
+            .expect("basic notetype");
+
+        let status = <NotesApi as NotesService>::create_note(
+            &api,
+            Request::new(CreateNoteRequest {
+                notetype_id,
+                deck: None,
+                fields: vec![
+                    NoteFieldUpdate {
+                        name: "Front".to_owned(),
+                        value: "created-front".to_owned(),
+                    },
+                    NoteFieldUpdate {
+                        name: "Back".to_owned(),
+                        value: "created-back".to_owned(),
+                    },
+                ],
+            }),
+        )
+        .await
+        .expect_err("missing deck selector should fail");
+
+        assert_eq!(status.code(), Code::InvalidArgument);
+        assert!(status.message().contains("deck selector"));
     }
 
     #[tokio::test]
