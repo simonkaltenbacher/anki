@@ -216,6 +216,7 @@ fn configured_capabilities(config: &ServerConfig) -> Vec<String> {
         "notes.get".to_owned(),
         "notes.get.batch".to_owned(),
         "notes.create".to_owned(),
+        "notes.delete".to_owned(),
         "notes.list_refs.stream".to_owned(),
         "notes.list.stream".to_owned(),
         "notes.update_fields".to_owned(),
@@ -239,4 +240,25 @@ fn configured_capabilities(config: &ServerConfig) -> Vec<String> {
         capabilities.push("auth.api_key".to_owned());
     }
     capabilities
+}
+
+#[cfg(test)]
+mod tests {
+    use super::configured_capabilities;
+    use crate::config::ServerConfig;
+
+    #[test]
+    fn configured_capabilities_include_notes_delete() {
+        let capabilities = configured_capabilities(&ServerConfig {
+            host: "127.0.0.1".to_owned(),
+            port: 50051,
+            api_key: Some("test-key".to_owned()),
+            anki_version: None,
+            auth_disabled: false,
+            allow_non_local: false,
+            allow_loopback_unauthenticated_health_check: false,
+        });
+
+        assert!(capabilities.iter().any(|cap| cap == "notes.delete"));
+    }
 }

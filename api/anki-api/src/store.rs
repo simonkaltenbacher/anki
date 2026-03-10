@@ -19,6 +19,7 @@ use anki_proto::notes::GetNoteChangesPageRequest;
 use anki_proto::notes::GetNoteChangesPageResponse;
 use anki_proto::notes::Note;
 use anki_proto::notes::NoteId;
+use anki_proto::notes::RemoveNotesRequest;
 use anki_proto::notes::UpdateNotesRequest;
 #[cfg(test)]
 use anki_proto::notes::{DeckAndNotetype, DefaultsForAddingRequest};
@@ -56,6 +57,7 @@ const METHOD_NOTES_ADD: u32 = 1;
 const METHOD_NOTES_DEFAULTS_FOR_ADDING: u32 = 3;
 const METHOD_NOTES_UPDATE: u32 = 5;
 const METHOD_NOTES_GET: u32 = 6;
+const METHOD_NOTES_REMOVE: u32 = 7;
 const METHOD_NOTES_GET_CHANGES_PAGE: u32 = 14;
 const METHOD_DECKS_GET_ID_BY_NAME: u32 = 7;
 const METHOD_DECKS_GET_NAMES: u32 = 13;
@@ -213,6 +215,19 @@ impl BackendStore {
         )?;
 
         self.get_note(added.note_id)
+    }
+
+    pub fn delete_notes(&self, note_ids: Vec<i64>) -> Result<u32, Status> {
+        let removed: anki_proto::collection::OpChangesWithCount = self.run_method(
+            SERVICE_NOTES,
+            METHOD_NOTES_REMOVE,
+            Some(RemoveNotesRequest {
+                note_ids,
+                card_ids: Vec::new(),
+            }),
+        )?;
+
+        Ok(removed.count)
     }
 
     pub fn update_notetype(&self, notetype: Notetype) -> Result<(), Status> {

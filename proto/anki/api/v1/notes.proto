@@ -11,6 +11,8 @@ service NotesService {
   rpc GetNotes(GetNotesRequest) returns (GetNotesResponse);
   // Creates a new note in the provided deck using named field values.
   rpc CreateNote(CreateNoteRequest) returns (CreateNoteResponse);
+  // Deletes one or more notes by ID.
+  rpc DeleteNotes(DeleteNotesRequest) returns (DeleteNotesResponse);
   // Streams lightweight note references (id + sort field), optionally filtered.
   rpc ListNoteRefs(ListNoteRefsRequest) returns (stream ListNoteRefsResponse);
   // Streams note payloads, optionally filtered by a backend search query.
@@ -83,6 +85,15 @@ message CreateNoteRequest {
 
 message CreateNoteResponse {
   Note note = 1;
+}
+
+message DeleteNotesRequest {
+  repeated int64 note_ids = 1;
+}
+
+message DeleteNotesResponse {
+  // Number of notes actually deleted.
+  uint64 deleted_count = 1;
 }
 
 message ListNoteRefsRequest {

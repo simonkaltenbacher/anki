@@ -8,6 +8,8 @@ use anki_api_proto::anki::api::v1::CountNotesRequest;
 use anki_api_proto::anki::api::v1::CountNotesResponse;
 use anki_api_proto::anki::api::v1::CreateNoteRequest;
 use anki_api_proto::anki::api::v1::CreateNoteResponse;
+use anki_api_proto::anki::api::v1::DeleteNotesRequest;
+use anki_api_proto::anki::api::v1::DeleteNotesResponse;
 use anki_api_proto::anki::api::v1::GetNoteChangesRequest;
 use anki_api_proto::anki::api::v1::GetNoteChangesResponse;
 use anki_api_proto::anki::api::v1::GetNoteRequest;
@@ -124,6 +126,24 @@ impl NotesService for NotesApi {
         let mut notetype_cache = NotetypeCache::default();
         let response = create_note_inner(&self.store, request.into_inner(), &mut notetype_cache)?;
         Ok(Response::new(response))
+    }
+
+    async fn delete_notes(
+        &self,
+        request: Request<DeleteNotesRequest>,
+    ) -> Result<Response<DeleteNotesResponse>, Status> {
+        let note_ids = request.into_inner().note_ids;
+        if note_ids.is_empty() {
+            return Err(Status::invalid_argument("note_ids must not be empty"));
+        }
+        if note_ids.iter().any(|note_id| *note_id <= 0) {
+            return Err(Status::invalid_argument("note_ids must all be > 0"));
+        }
+
+        let deleted_count = self.store.delete_notes(note_ids)?;
+        Ok(Response::new(DeleteNotesResponse {
+            deleted_count: u64::from(deleted_count),
+        }))
     }
 
     async fn list_note_refs(
@@ -950,6 +970,82 @@ mod tests {
 
         assert_eq!(status.code(), Code::InvalidArgument);
         assert!(status.message().contains("deck selector"));
+    }
+
+    #[tokio::test]
+    async fn delete_notes_removes_multiple_notes() {
+        let fixture = TestStore::new("notes-delete-multiple");
+        let store = fixture.store();
+        let api = NotesApi::new(store.clone());
+        let note_a = store.create_test_note().expect("seed note a");
+        let note_b = store.create_test_note().expect("seed note b");
+
+        let response = <NotesApi as NotesService>::delete_notes(
+            &api,
+            Request::new(DeleteNotesRequest {
+                note_ids: vec![note_a.id, note_b.id],
+            }),
+        )
+        .await
+        .expect("delete notes")
+        .into_inner();
+
+        assert_eq!(response.deleted_count, 2);
+
+        let status = <NotesApi as NotesService>::get_note(
+            &api,
+            Request::new(GetNoteRequest { note_id: note_a.id }),
+        )
+        .await
+        .expect_err("deleted note should not exist");
+        assert_eq!(status.code(), Code::NotFound);
+
+        let remaining = <NotesApi as NotesService>::count_notes(
+            &api,
+            Request::new(CountNotesRequest {
+                query: format!("nid:{} or nid:{}", note_a.id, note_b.id),
+            }),
+        )
+        .await
+        .expect("count deleted notes")
+        .into_inner();
+        assert_eq!(remaining.count, 0);
+    }
+
+    #[tokio::test]
+    async fn delete_notes_rejects_empty_ids() {
+        let fixture = TestStore::new("notes-delete-empty");
+        let api = NotesApi::new(fixture.store());
+
+        let status = <NotesApi as NotesService>::delete_notes(
+            &api,
+            Request::new(DeleteNotesRequest {
+                note_ids: Vec::new(),
+            }),
+        )
+        .await
+        .expect_err("empty note_ids should fail");
+
+        assert_eq!(status.code(), Code::InvalidArgument);
+        assert!(status.message().contains("must not be empty"));
+    }
+
+    #[tokio::test]
+    async fn delete_notes_rejects_non_positive_ids() {
+        let fixture = TestStore::new("notes-delete-invalid-id");
+        let api = NotesApi::new(fixture.store());
+
+        let status = <NotesApi as NotesService>::delete_notes(
+            &api,
+            Request::new(DeleteNotesRequest {
+                note_ids: vec![0, 1],
+            }),
+        )
+        .await
+        .expect_err("non-positive note_ids should fail");
+
+        assert_eq!(status.code(), Code::InvalidArgument);
+        assert!(status.message().contains("must all be > 0"));
     }
 
     #[tokio::test]

@@ -72,6 +72,7 @@ pub enum Capability {
     NotesGet,
     NotesGetBatch,
     NotesCreate,
+    NotesDelete,
     NotesListRefsStream,
     NotesListStream,
     NotesUpdateFields,
@@ -103,6 +104,7 @@ impl Capability {
             "notes.get" => Some(Self::NotesGet),
             "notes.get.batch" => Some(Self::NotesGetBatch),
             "notes.create" => Some(Self::NotesCreate),
+            "notes.delete" => Some(Self::NotesDelete),
             "notes.list_refs.stream" => Some(Self::NotesListRefsStream),
             "notes.list.stream" => Some(Self::NotesListStream),
             "notes.update_fields" => Some(Self::NotesUpdateFields),
@@ -397,6 +399,18 @@ impl ApiClient {
             fields,
         )
         .await
+    }
+
+    /// Deletes multiple notes by ID.
+    pub async fn delete_notes(&self, note_ids: Vec<i64>) -> Result<u64, ClientError> {
+        let mut client = NotesClient::new(self.channel.clone());
+        let request = self.request(v1::DeleteNotesRequest { note_ids })?;
+        let response = client
+            .delete_notes(request)
+            .await
+            .map_err(Self::map_status)?
+            .into_inner();
+        Ok(response.deleted_count)
     }
 
     /// Streams note references, optionally filtered by backend search query.
@@ -837,6 +851,12 @@ mod tests {
     fn parses_notes_create_capability() {
         let caps = parse_capabilities(&["notes.create".to_owned()]);
         assert!(caps.has(Capability::NotesCreate));
+    }
+
+    #[test]
+    fn parses_notes_delete_capability() {
+        let caps = parse_capabilities(&["notes.delete".to_owned()]);
+        assert!(caps.has(Capability::NotesDelete));
     }
 
     #[test]
