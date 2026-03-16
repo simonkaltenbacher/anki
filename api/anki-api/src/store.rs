@@ -30,6 +30,7 @@ use anki_proto::notetypes::NotetypeId;
 use anki_proto::notetypes::NotetypeNames;
 use anki_proto::search::SearchRequest;
 use anki_proto::search::SearchResponse;
+use anki_proto::search::SortOrder;
 use prost::Message;
 use thiserror::Error;
 use tonic::Status;
@@ -90,13 +91,17 @@ impl BackendStore {
         )
     }
 
-    pub fn search_note_ids_with_query(&self, query: &str) -> Result<Vec<i64>, Status> {
+    pub fn search_note_ids_with_query(
+        &self,
+        query: &str,
+        order: Option<SortOrder>,
+    ) -> Result<Vec<i64>, Status> {
         let response: SearchResponse = self.run_method(
             SERVICE_SEARCH,
             METHOD_SEARCH_NOTES,
             Some(SearchRequest {
                 search: query.to_owned(),
-                order: None,
+                order,
             }),
         )?;
         Ok(response.ids)
@@ -259,7 +264,7 @@ impl BackendStore {
                 (
                     i64::from(entry.usn),
                     entry.note_id,
-                    i64::from(entry.mtime_secs),
+                    entry.mtime_secs,
                 )
             })
             .collect())
@@ -290,6 +295,15 @@ impl BackendStore {
 
     #[cfg(test)]
     pub(crate) fn create_test_note(&self) -> Result<Note, Status> {
+        self.create_test_note_with_fields("api-test-front", Some("api-test-back"))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn create_test_note_with_fields(
+        &self,
+        front: &str,
+        back: Option<&str>,
+    ) -> Result<Note, Status> {
         let defaults: DeckAndNotetype = self.run_method(
             SERVICE_NOTES,
             METHOD_NOTES_DEFAULTS_FOR_ADDING,
@@ -306,10 +320,10 @@ impl BackendStore {
             }),
         )?;
         if let Some(first) = note.fields.first_mut() {
-            *first = "api-test-front".to_owned();
+            *first = front.to_owned();
         }
-        if note.fields.len() > 1 {
-            note.fields[1] = "api-test-back".to_owned();
+        if let (Some(back), true) = (back, note.fields.len() > 1) {
+            note.fields[1] = back.to_owned();
         }
 
         let added: AddNoteResponse = self.run_method(

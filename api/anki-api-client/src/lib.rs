@@ -419,12 +419,14 @@ impl ApiClient {
         query: Option<String>,
         offset: Option<u64>,
         limit: Option<u64>,
+        order_by: Vec<v1::ColumnOrdering>,
     ) -> Result<NoteRefsStream, ClientError> {
         let mut client = NotesClient::new(self.channel.clone());
         let request = self.request(v1::ListNoteRefsRequest {
             query: query.unwrap_or_default(),
             offset: offset.unwrap_or(0),
             limit: limit.unwrap_or(0),
+            order_by,
         })?;
         let response = client
             .list_note_refs(request)
@@ -439,12 +441,14 @@ impl ApiClient {
         query: Option<String>,
         offset: Option<u64>,
         limit: Option<u64>,
+        order_by: Vec<v1::ColumnOrdering>,
     ) -> Result<NotesStream, ClientError> {
         let mut client = NotesClient::new(self.channel.clone());
         let request = self.request(v1::ListNotesRequest {
             query: query.unwrap_or_default(),
             offset: offset.unwrap_or(0),
             limit: limit.unwrap_or(0),
+            order_by,
         })?;
         let response = client.list_notes(request).await.map_err(Self::map_status)?;
         Ok(ResponseStream::new(response.into_inner()))

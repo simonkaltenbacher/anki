@@ -12,6 +12,7 @@ use tonic::Status;
 
 const DEFAULT_CHANGE_LIMIT: usize = 200;
 const MAX_CHANGE_LIMIT: usize = 1000;
+type ChangePage = (Vec<(i64, i64, i64)>, String);
 
 pub fn parse_usn_cursor(cursor: &str) -> Result<(i64, i64), Status> {
     if cursor.is_empty() {
@@ -57,22 +58,22 @@ pub fn enforce_expected_usn(
     // - if `expected_usn` is provided and does not match current usn,
     //   return ABORTED with a stable VERSION_CONFLICT marker.
     // - if `expected_usn` is omitted, writes keep last-writer-wins behavior.
-    if let Some(expected_usn) = expected_usn {
-        if expected_usn != actual_usn {
-            let detail = ErrorDetail {
-                code: "VERSION_CONFLICT".to_owned(),
-                retryable: true,
-                message: "write precondition did not match current usn".to_owned(),
-            };
-            let message = format!(
-                "version conflict for {resource} id={resource_id}: expected_usn={expected_usn} actual_usn={actual_usn}"
-            );
-            return Err(Status::with_details(
-                Code::Aborted,
-                message,
-                detail.encode_to_vec().into(),
-            ));
-        }
+    if let Some(expected_usn) = expected_usn
+        && expected_usn != actual_usn
+    {
+        let detail = ErrorDetail {
+            code: "VERSION_CONFLICT".to_owned(),
+            retryable: true,
+            message: "write precondition did not match current usn".to_owned(),
+        };
+        let message = format!(
+            "version conflict for {resource} id={resource_id}: expected_usn={expected_usn} actual_usn={actual_usn}"
+        );
+        return Err(Status::with_details(
+            Code::Aborted,
+            message,
+            detail.encode_to_vec().into(),
+        ));
     }
     Ok(())
 }
@@ -113,7 +114,7 @@ pub fn get_changes_page<F>(
     cursor: &str,
     limit: u32,
     mut fetch_rows: F,
-) -> Result<(Vec<(i64, i64, i64)>, String), Status>
+) -> Result<ChangePage, Status>
 where
     F: FnMut((i64, i64), u32) -> Result<Vec<(i64, i64, i64)>, Status>,
 {

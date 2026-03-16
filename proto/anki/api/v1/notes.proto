@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package anki.api.v1;
 
+import "anki/api/v1/common.proto";
 import "google/protobuf/timestamp.proto";
 
 // Note read/write and change-feed APIs.
@@ -104,6 +105,15 @@ message ListNoteRefsRequest {
   uint64 offset = 2;
   // Max results to stream. 0 = unlimited.
   uint64 limit = 3;
+  // Multi-column sort applied before pagination. First entry is primary sort,
+  // subsequent entries are tie-breakers. Empty means backend default order.
+  //
+  // Accepted column values for note listing:
+  //   "created_at"  - note creation time
+  //   "modified_at" - note modification time
+  //   "sort_field"  - notetype sort field value
+  //   "tags"        - note tags
+  repeated ColumnOrdering order_by = 4;
 }
 
 message NoteRef {
@@ -123,6 +133,15 @@ message ListNotesRequest {
   uint64 offset = 2;
   // Max results to stream. 0 = unlimited.
   uint64 limit = 3;
+  // Multi-column sort applied before pagination. First entry is primary sort,
+  // subsequent entries are tie-breakers. Empty means backend default order.
+  //
+  // Accepted column values for note listing:
+  //   "created_at"  - note creation time
+  //   "modified_at" - note modification time
+  //   "sort_field"  - notetype sort field value
+  //   "tags"        - note tags
+  repeated ColumnOrdering order_by = 4;
 }
 
 message ListNotesResponse {

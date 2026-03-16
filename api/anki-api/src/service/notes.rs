@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 
+use anki_api_proto::anki::api::v1::ColumnOrdering;
 use anki_api_proto::anki::api::v1::CountNotesRequest;
 use anki_api_proto::anki::api::v1::CountNotesResponse;
 use anki_api_proto::anki::api::v1::CreateNoteRequest;
@@ -23,12 +24,15 @@ use anki_api_proto::anki::api::v1::ListNotesResponse;
 use anki_api_proto::anki::api::v1::NoteChange;
 use anki_api_proto::anki::api::v1::NoteRef;
 use anki_api_proto::anki::api::v1::NoteWriteMetadata;
+use anki_api_proto::anki::api::v1::SortDirection;
 use anki_api_proto::anki::api::v1::UpdateNoteFieldsBatchRequest;
 use anki_api_proto::anki::api::v1::UpdateNoteFieldsBatchResponse;
 use anki_api_proto::anki::api::v1::UpdateNoteFieldsRequest;
 use anki_api_proto::anki::api::v1::UpdateNoteFieldsResponse;
 use anki_api_proto::anki::api::v1::create_note_request::Deck;
 use anki_api_proto::anki::api::v1::notes_service_server::NotesService;
+use anki_proto::search::SortOrder as BackendSortOrder;
+use anki_proto::search::sort_order::Value as BackendSortOrderValue;
 use futures::Stream;
 use tokio::sync::mpsc;
 use tonic::Request;
@@ -151,8 +155,9 @@ impl NotesService for NotesApi {
         request: Request<ListNoteRefsRequest>,
     ) -> Result<Response<Self::ListNoteRefsStream>, Status> {
         let req = request.into_inner();
+        let order = note_order_by_to_backend_sort(req.order_by)?;
         Ok(Response::new(self.stream_note_refs_for_query(
-            req.query, req.offset, req.limit,
+            req.query, req.offset, req.limit, order,
         )))
     }
 
@@ -161,9 +166,10 @@ impl NotesService for NotesApi {
         request: Request<ListNotesRequest>,
     ) -> Result<Response<Self::ListNotesStream>, Status> {
         let req = request.into_inner();
-        Ok(Response::new(
-            self.stream_notes_for_query(req.query, req.offset, req.limit),
-        ))
+        let order = note_order_by_to_backend_sort(req.order_by)?;
+        Ok(Response::new(self.stream_notes_for_query(
+            req.query, req.offset, req.limit, order,
+        )))
     }
 
     async fn update_note_fields(
@@ -226,7 +232,7 @@ impl NotesService for NotesApi {
         request: Request<CountNotesRequest>,
     ) -> Result<Response<CountNotesResponse>, Status> {
         let query = request.into_inner().query;
-        let ids = self.store.search_note_ids_with_query(&query)?;
+        let ids = self.store.search_note_ids_with_query(&query, None)?;
         Ok(Response::new(CountNotesResponse {
             count: ids.len() as u64,
         }))
@@ -245,18 +251,62 @@ fn paginate_range(len: usize, offset: u64, limit: u64) -> std::ops::Range<usize>
     start..end
 }
 
+fn note_order_by_to_backend_sort(
+    order_by: Vec<ColumnOrdering>,
+) -> Result<Option<BackendSortOrder>, Status> {
+    if order_by.is_empty() {
+        return Ok(None);
+    }
+
+    let mut clauses = Vec::with_capacity(order_by.len());
+    for ordering in order_by {
+        let expr = match ordering.column.as_str() {
+            "created_at" => "n.id",
+            "modified_at" => "n.mod",
+            "sort_field" => "n.sfld collate nocase",
+            "tags" => "n.tags",
+            "" => {
+                return Err(Status::invalid_argument(
+                    "order_by column must not be empty",
+                ));
+            }
+            other => {
+                return Err(Status::invalid_argument(format!(
+                    "unsupported note sort column: {other}"
+                )));
+            }
+        };
+        let direction = match SortDirection::try_from(ordering.direction) {
+            Ok(SortDirection::Ascending) => "ASC",
+            Ok(SortDirection::Descending) => "DESC",
+            Err(_) => {
+                return Err(Status::invalid_argument(format!(
+                    "unsupported sort direction: {}",
+                    ordering.direction
+                )));
+            }
+        };
+        clauses.push(format!("{expr} {direction}"));
+    }
+
+    Ok(Some(BackendSortOrder {
+        value: Some(BackendSortOrderValue::Custom(clauses.join(", "))),
+    }))
+}
+
 impl NotesApi {
     fn stream_note_refs_for_query(
         &self,
         query: String,
         offset: u64,
         limit: u64,
+        order: Option<BackendSortOrder>,
     ) -> ListNoteRefsStream {
         let (tx, receiver) = mpsc::channel(64);
         let store = self.store.clone();
 
         tokio::task::spawn_blocking(move || {
-            let note_ids = match store.search_note_ids_with_query(&query) {
+            let note_ids = match store.search_note_ids_with_query(&query, order) {
                 Ok(ids) => ids,
                 Err(err) => {
                     let _ = tx.blocking_send(Err(err));
@@ -277,12 +327,18 @@ impl NotesApi {
         ListNoteRefsStream { receiver }
     }
 
-    fn stream_notes_for_query(&self, query: String, offset: u64, limit: u64) -> ListNotesStream {
+    fn stream_notes_for_query(
+        &self,
+        query: String,
+        offset: u64,
+        limit: u64,
+        order: Option<BackendSortOrder>,
+    ) -> ListNotesStream {
         let (tx, receiver) = mpsc::channel(32);
         let store = self.store.clone();
 
         tokio::task::spawn_blocking(move || {
-            let note_ids = match store.search_note_ids_with_query(&query) {
+            let note_ids = match store.search_note_ids_with_query(&query, order) {
                 Ok(ids) => ids,
                 Err(err) => {
                     let _ = tx.blocking_send(Err(err));
@@ -497,6 +553,29 @@ mod tests {
 
     use super::*;
     use crate::service::common::TestStore;
+
+    fn ordering(column: &str, direction: SortDirection) -> ColumnOrdering {
+        ColumnOrdering {
+            column: column.to_owned(),
+            direction: direction as i32,
+        }
+    }
+
+    async fn collect_note_ref_ids(mut stream: ListNoteRefsStream) -> Vec<i64> {
+        let mut ids = Vec::new();
+        while let Some(item) = stream.next().await {
+            ids.push(item.expect("stream item").note_ref.expect("ref").note_id);
+        }
+        ids
+    }
+
+    async fn collect_note_ids(mut stream: ListNotesStream) -> Vec<i64> {
+        let mut ids = Vec::new();
+        while let Some(item) = stream.next().await {
+            ids.push(item.expect("stream item").note.expect("note").note_id);
+        }
+        ids
+    }
 
     #[tokio::test]
     async fn update_note_fields_reports_version_conflict_details() {
@@ -1117,6 +1196,7 @@ mod tests {
                 query: String::new(),
                 offset: 0,
                 limit: 0,
+                order_by: vec![],
             }),
         )
         .await
@@ -1144,6 +1224,7 @@ mod tests {
                 query: format!("nid:{}", note.id),
                 offset: 0,
                 limit: 0,
+                order_by: vec![],
             }),
         )
         .await
@@ -1179,6 +1260,7 @@ mod tests {
                 query: format!("nid:{}", note.id),
                 offset: 0,
                 limit: 0,
+                order_by: vec![],
             }),
         )
         .await
@@ -1216,7 +1298,7 @@ mod tests {
         .into_inner();
         assert_eq!(first_page.changes.len(), 1);
         assert!(!first_page.next_cursor.is_empty());
-        let first_row = first_page.changes[0].clone();
+        let first_row = first_page.changes[0];
 
         let second_page = <NotesApi as NotesService>::get_note_changes(
             &api,
@@ -1229,7 +1311,7 @@ mod tests {
         .expect("second page")
         .into_inner();
         assert!(!second_page.changes.is_empty());
-        let second_row = second_page.changes[0].clone();
+        let second_row = second_page.changes[0];
         assert_ne!(second_row.note_id, first_row.note_id);
         assert!(
             (second_row.usn, second_row.note_id) > (first_row.usn, first_row.note_id),
@@ -1287,40 +1369,36 @@ mod tests {
         let _ = store.create_test_note().expect("seed note b");
         let _ = store.create_test_note().expect("seed note c");
 
-        let mut stream = <NotesApi as NotesService>::list_note_refs(
+        let stream = <NotesApi as NotesService>::list_note_refs(
             &api,
             Request::new(ListNoteRefsRequest {
                 query: String::new(),
                 offset: 0,
                 limit: 0,
+                order_by: vec![],
             }),
         )
         .await
         .expect("list all")
         .into_inner();
 
-        let mut all_ids = Vec::new();
-        while let Some(item) = stream.next().await {
-            all_ids.push(item.expect("stream item").note_ref.expect("ref").note_id);
-        }
+        let all_ids = collect_note_ref_ids(stream).await;
         assert!(all_ids.len() >= 3);
 
-        let mut stream = <NotesApi as NotesService>::list_note_refs(
+        let stream = <NotesApi as NotesService>::list_note_refs(
             &api,
             Request::new(ListNoteRefsRequest {
                 query: String::new(),
                 offset: 1,
                 limit: 0,
+                order_by: vec![],
             }),
         )
         .await
         .expect("list with offset")
         .into_inner();
 
-        let mut offset_ids = Vec::new();
-        while let Some(item) = stream.next().await {
-            offset_ids.push(item.expect("stream item").note_ref.expect("ref").note_id);
-        }
+        let offset_ids = collect_note_ref_ids(stream).await;
         assert_eq!(offset_ids, all_ids[1..]);
     }
 
@@ -1333,22 +1411,20 @@ mod tests {
         let _ = store.create_test_note().expect("seed note b");
         let _ = store.create_test_note().expect("seed note c");
 
-        let mut stream = <NotesApi as NotesService>::list_note_refs(
+        let stream = <NotesApi as NotesService>::list_note_refs(
             &api,
             Request::new(ListNoteRefsRequest {
                 query: String::new(),
                 offset: 0,
                 limit: 2,
+                order_by: vec![],
             }),
         )
         .await
         .expect("list with limit")
         .into_inner();
 
-        let mut ids = Vec::new();
-        while let Some(item) = stream.next().await {
-            ids.push(item.expect("stream item").note_ref.expect("ref").note_id);
-        }
+        let ids = collect_note_ref_ids(stream).await;
         assert_eq!(ids.len(), 2);
     }
 
@@ -1361,39 +1437,35 @@ mod tests {
         let _ = store.create_test_note().expect("seed note b");
         let _ = store.create_test_note().expect("seed note c");
 
-        let mut all_stream = <NotesApi as NotesService>::list_note_refs(
+        let all_stream = <NotesApi as NotesService>::list_note_refs(
             &api,
             Request::new(ListNoteRefsRequest {
                 query: String::new(),
                 offset: 0,
                 limit: 0,
+                order_by: vec![],
             }),
         )
         .await
         .expect("list all")
         .into_inner();
 
-        let mut all_ids = Vec::new();
-        while let Some(item) = all_stream.next().await {
-            all_ids.push(item.expect("stream item").note_ref.expect("ref").note_id);
-        }
+        let all_ids = collect_note_ref_ids(all_stream).await;
 
-        let mut stream = <NotesApi as NotesService>::list_note_refs(
+        let stream = <NotesApi as NotesService>::list_note_refs(
             &api,
             Request::new(ListNoteRefsRequest {
                 query: String::new(),
                 offset: 1,
                 limit: 1,
+                order_by: vec![],
             }),
         )
         .await
         .expect("list with offset+limit")
         .into_inner();
 
-        let mut ids = Vec::new();
-        while let Some(item) = stream.next().await {
-            ids.push(item.expect("stream item").note_ref.expect("ref").note_id);
-        }
+        let ids = collect_note_ref_ids(stream).await;
         assert_eq!(ids.len(), 1);
         assert_eq!(ids[0], all_ids[1]);
     }
@@ -1407,42 +1479,155 @@ mod tests {
         let _ = store.create_test_note().expect("seed note b");
         let _ = store.create_test_note().expect("seed note c");
 
-        let mut all_stream = <NotesApi as NotesService>::list_notes(
+        let all_stream = <NotesApi as NotesService>::list_notes(
             &api,
             Request::new(ListNotesRequest {
                 query: String::new(),
                 offset: 0,
                 limit: 0,
+                order_by: vec![],
             }),
         )
         .await
         .expect("list all")
         .into_inner();
 
-        let mut all_ids = Vec::new();
-        while let Some(item) = all_stream.next().await {
-            all_ids.push(item.expect("stream item").note.expect("note").note_id);
-        }
+        let all_ids = collect_note_ids(all_stream).await;
         assert!(all_ids.len() >= 3);
 
-        let mut stream = <NotesApi as NotesService>::list_notes(
+        let stream = <NotesApi as NotesService>::list_notes(
             &api,
             Request::new(ListNotesRequest {
                 query: String::new(),
                 offset: 1,
                 limit: 1,
+                order_by: vec![],
             }),
         )
         .await
         .expect("list with offset+limit")
         .into_inner();
 
-        let mut ids = Vec::new();
-        while let Some(item) = stream.next().await {
-            ids.push(item.expect("stream item").note.expect("note").note_id);
-        }
+        let ids = collect_note_ids(stream).await;
         assert_eq!(ids.len(), 1);
         assert_eq!(ids[0], all_ids[1]);
+    }
+
+    #[tokio::test]
+    async fn list_note_refs_supports_created_at_descending() {
+        let fixture = TestStore::new("notes-list-refs-created-at-desc");
+        let store = fixture.store();
+        let api = NotesApi::new(store.clone());
+        let note_a = store
+            .create_test_note_with_fields("sort-a", Some("back-a"))
+            .expect("seed note a");
+        let note_b = store
+            .create_test_note_with_fields("sort-b", Some("back-b"))
+            .expect("seed note b");
+
+        let stream = <NotesApi as NotesService>::list_note_refs(
+            &api,
+            Request::new(ListNoteRefsRequest {
+                query: format!("nid:{} or nid:{}", note_a.id, note_b.id),
+                offset: 0,
+                limit: 0,
+                order_by: vec![ordering("created_at", SortDirection::Descending)],
+            }),
+        )
+        .await
+        .expect("list note refs")
+        .into_inner();
+
+        assert_eq!(
+            collect_note_ref_ids(stream).await,
+            vec![note_b.id, note_a.id]
+        );
+    }
+
+    #[tokio::test]
+    async fn list_notes_supports_sort_field_ordering() {
+        let fixture = TestStore::new("notes-list-notes-sort-field");
+        let store = fixture.store();
+        let api = NotesApi::new(store.clone());
+        let note_b = store
+            .create_test_note_with_fields("bravo", Some("back-b"))
+            .expect("seed note b");
+        let note_a = store
+            .create_test_note_with_fields("alpha", Some("back-a"))
+            .expect("seed note a");
+
+        let stream = <NotesApi as NotesService>::list_notes(
+            &api,
+            Request::new(ListNotesRequest {
+                query: format!("nid:{} or nid:{}", note_a.id, note_b.id),
+                offset: 0,
+                limit: 0,
+                order_by: vec![ordering("sort_field", SortDirection::Ascending)],
+            }),
+        )
+        .await
+        .expect("list notes")
+        .into_inner();
+
+        assert_eq!(collect_note_ids(stream).await, vec![note_a.id, note_b.id]);
+    }
+
+    #[tokio::test]
+    async fn list_notes_supports_multi_column_ordering() {
+        let fixture = TestStore::new("notes-list-notes-multi-column");
+        let store = fixture.store();
+        let api = NotesApi::new(store.clone());
+        let note_a = store
+            .create_test_note_with_fields("same", Some("back-a"))
+            .expect("seed note a");
+        let note_b = store
+            .create_test_note_with_fields("same", Some("back-b"))
+            .expect("seed note b");
+
+        let stream = <NotesApi as NotesService>::list_notes(
+            &api,
+            Request::new(ListNotesRequest {
+                query: format!("nid:{} or nid:{}", note_a.id, note_b.id),
+                offset: 0,
+                limit: 0,
+                order_by: vec![
+                    ordering("sort_field", SortDirection::Ascending),
+                    ordering("created_at", SortDirection::Descending),
+                ],
+            }),
+        )
+        .await
+        .expect("list notes")
+        .into_inner();
+
+        assert_eq!(collect_note_ids(stream).await, vec![note_b.id, note_a.id]);
+    }
+
+    #[tokio::test]
+    async fn list_notes_rejects_unknown_order_column() {
+        let fixture = TestStore::new("notes-list-notes-invalid-order-column");
+        let store = fixture.store();
+        let api = NotesApi::new(store.clone());
+        let _ = store.create_test_note().expect("seed note");
+
+        let result = <NotesApi as NotesService>::list_notes(
+            &api,
+            Request::new(ListNotesRequest {
+                query: String::new(),
+                offset: 0,
+                limit: 0,
+                order_by: vec![ordering("notetype", SortDirection::Ascending)],
+            }),
+        )
+        .await;
+
+        let status = match result {
+            Ok(_) => panic!("unknown order column should fail"),
+            Err(status) => status,
+        };
+
+        assert_eq!(status.code(), Code::InvalidArgument);
+        assert!(status.message().contains("unsupported note sort column"));
     }
 
     #[test]
