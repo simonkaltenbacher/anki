@@ -4,7 +4,6 @@ use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 
-use anki_api_proto::anki::api::v1::ColumnOrdering;
 use anki_api_proto::anki::api::v1::CountNotesRequest;
 use anki_api_proto::anki::api::v1::CountNotesResponse;
 use anki_api_proto::anki::api::v1::CreateNoteRequest;
@@ -22,7 +21,9 @@ use anki_api_proto::anki::api::v1::ListNoteRefsResponse;
 use anki_api_proto::anki::api::v1::ListNotesRequest;
 use anki_api_proto::anki::api::v1::ListNotesResponse;
 use anki_api_proto::anki::api::v1::NoteChange;
+use anki_api_proto::anki::api::v1::NoteOrdering;
 use anki_api_proto::anki::api::v1::NoteRef;
+use anki_api_proto::anki::api::v1::NoteSortColumn;
 use anki_api_proto::anki::api::v1::NoteWriteMetadata;
 use anki_api_proto::anki::api::v1::SortDirection;
 use anki_api_proto::anki::api::v1::UpdateNoteFieldsBatchRequest;
@@ -252,7 +253,7 @@ fn paginate_range(len: usize, offset: u64, limit: u64) -> std::ops::Range<usize>
 }
 
 fn note_order_by_to_backend_sort(
-    order_by: Vec<ColumnOrdering>,
+    order_by: Vec<NoteOrdering>,
 ) -> Result<Option<BackendSortOrder>, Status> {
     if order_by.is_empty() {
         return Ok(None);
@@ -260,19 +261,20 @@ fn note_order_by_to_backend_sort(
 
     let mut clauses = Vec::with_capacity(order_by.len());
     for ordering in order_by {
-        let expr = match ordering.column.as_str() {
-            "created_at" => "n.id",
-            "modified_at" => "n.mod",
-            "sort_field" => "n.sfld collate nocase",
-            "tags" => "n.tags",
-            "" => {
+        let expr = match NoteSortColumn::try_from(ordering.column) {
+            Ok(NoteSortColumn::CreatedAt) => "n.id",
+            Ok(NoteSortColumn::ModifiedAt) => "n.mod",
+            Ok(NoteSortColumn::SortField) => "n.sfld collate nocase",
+            Ok(NoteSortColumn::Tags) => "n.tags",
+            Ok(NoteSortColumn::Unspecified) => {
                 return Err(Status::invalid_argument(
-                    "order_by column must not be empty",
+                    "order_by column must not be unspecified",
                 ));
             }
-            other => {
+            Err(_) => {
                 return Err(Status::invalid_argument(format!(
-                    "unsupported note sort column: {other}"
+                    "unsupported note sort column: {}",
+                    ordering.column
                 )));
             }
         };
@@ -554,9 +556,9 @@ mod tests {
     use super::*;
     use crate::service::common::TestStore;
 
-    fn ordering(column: &str, direction: SortDirection) -> ColumnOrdering {
-        ColumnOrdering {
-            column: column.to_owned(),
+    fn ordering(column: NoteSortColumn, direction: SortDirection) -> NoteOrdering {
+        NoteOrdering {
+            column: column as i32,
             direction: direction as i32,
         }
     }
@@ -1531,7 +1533,10 @@ mod tests {
                 query: format!("nid:{} or nid:{}", note_a.id, note_b.id),
                 offset: 0,
                 limit: 0,
-                order_by: vec![ordering("created_at", SortDirection::Descending)],
+                order_by: vec![ordering(
+                    NoteSortColumn::CreatedAt,
+                    SortDirection::Descending,
+                )],
             }),
         )
         .await
@@ -1562,7 +1567,10 @@ mod tests {
                 query: format!("nid:{} or nid:{}", note_a.id, note_b.id),
                 offset: 0,
                 limit: 0,
-                order_by: vec![ordering("sort_field", SortDirection::Ascending)],
+                order_by: vec![ordering(
+                    NoteSortColumn::SortField,
+                    SortDirection::Ascending,
+                )],
             }),
         )
         .await
@@ -1591,8 +1599,8 @@ mod tests {
                 offset: 0,
                 limit: 0,
                 order_by: vec![
-                    ordering("sort_field", SortDirection::Ascending),
-                    ordering("created_at", SortDirection::Descending),
+                    ordering(NoteSortColumn::SortField, SortDirection::Ascending),
+                    ordering(NoteSortColumn::CreatedAt, SortDirection::Descending),
                 ],
             }),
         )
@@ -1604,7 +1612,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_notes_rejects_unknown_order_column() {
+    async fn list_notes_rejects_unspecified_order_column() {
         let fixture = TestStore::new("notes-list-notes-invalid-order-column");
         let store = fixture.store();
         let api = NotesApi::new(store.clone());
@@ -1616,18 +1624,21 @@ mod tests {
                 query: String::new(),
                 offset: 0,
                 limit: 0,
-                order_by: vec![ordering("notetype", SortDirection::Ascending)],
+                order_by: vec![ordering(
+                    NoteSortColumn::Unspecified,
+                    SortDirection::Ascending,
+                )],
             }),
         )
         .await;
 
         let status = match result {
-            Ok(_) => panic!("unknown order column should fail"),
+            Ok(_) => panic!("unspecified order column should fail"),
             Err(status) => status,
         };
 
         assert_eq!(status.code(), Code::InvalidArgument);
-        assert!(status.message().contains("unsupported note sort column"));
+        assert!(status.message().contains("must not be unspecified"));
     }
 
     #[test]

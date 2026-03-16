@@ -7,13 +7,6 @@ enum SortDirection {
   SORT_DIRECTION_DESCENDING = 1;
 }
 
-message ColumnOrdering {
-  // Column name to sort by. Accepted values are RPC-specific and
-  // validated server-side. Unrecognized columns return INVALID_ARGUMENT.
-  string column = 1;
-  SortDirection direction = 2;
-}
-
 // Structured application error detail attached to gRPC status details.
 // `code` values are stable integration contract values (for example
 // `VERSION_CONFLICT` for optimistic concurrency failures).

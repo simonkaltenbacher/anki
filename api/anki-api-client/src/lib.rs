@@ -419,7 +419,7 @@ impl ApiClient {
         query: Option<String>,
         offset: Option<u64>,
         limit: Option<u64>,
-        order_by: Vec<v1::ColumnOrdering>,
+        order_by: Vec<v1::NoteOrdering>,
     ) -> Result<NoteRefsStream, ClientError> {
         let mut client = NotesClient::new(self.channel.clone());
         let request = self.request(v1::ListNoteRefsRequest {
@@ -441,7 +441,7 @@ impl ApiClient {
         query: Option<String>,
         offset: Option<u64>,
         limit: Option<u64>,
-        order_by: Vec<v1::ColumnOrdering>,
+        order_by: Vec<v1::NoteOrdering>,
     ) -> Result<NotesStream, ClientError> {
         let mut client = NotesClient::new(self.channel.clone());
         let request = self.request(v1::ListNotesRequest {
