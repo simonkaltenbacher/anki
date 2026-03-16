@@ -6,22 +6,26 @@ import "google/protobuf/timestamp.proto";
 
 // Notetype read/write and change-feed APIs.
 service NotetypesService {
-  rpc ListNotetypeRefs(ListNotetypeRefsRequest) returns (ListNotetypeRefsResponse);
+  rpc ListNotetypeRefs(ListNotetypeRefsRequest)
+      returns (ListNotetypeRefsResponse);
   rpc ListNotetypes(ListNotetypesRequest) returns (ListNotetypesResponse);
   rpc GetNotetype(GetNotetypeRequest) returns (GetNotetypeResponse);
   // Gets multiple notetypes by ID, in request order.
   rpc GetNotetypes(GetNotetypesRequest) returns (GetNotetypesResponse);
-  rpc GetNotetypeIdByName(GetNotetypeIdByNameRequest) returns (GetNotetypeIdByNameResponse);
+  rpc GetNotetypeIdByName(GetNotetypeIdByNameRequest)
+      returns (GetNotetypeIdByNameResponse);
   // Atomically updates templates and CSS for one notetype.
   // If `expected_usn` is set and stale, returns `ABORTED` with
   // `ErrorDetail.code=VERSION_CONFLICT`.
-  rpc UpdateNotetypeContent(UpdateNotetypeContentRequest) returns (UpdateNotetypeContentResponse);
+  rpc UpdateNotetypeContent(UpdateNotetypeContentRequest)
+      returns (UpdateNotetypeContentResponse);
   // Updates templates only.
   rpc UpdateTemplates(UpdateTemplatesRequest) returns (UpdateTemplatesResponse);
   // Batch updates are not atomic. Updates are applied in request order and
   // processing stops on the first error. Earlier successful updates are not
   // rolled back. `results.len()` indicates successful prefix length.
-  rpc UpdateTemplatesBatch(UpdateTemplatesBatchRequest) returns (UpdateTemplatesBatchResponse);
+  rpc UpdateTemplatesBatch(UpdateTemplatesBatchRequest)
+      returns (UpdateTemplatesBatchResponse);
   // Updates CSS only.
   rpc UpdateCss(UpdateCssRequest) returns (UpdateCssResponse);
   // Batch updates are not atomic. Updates are applied in request order and
@@ -30,7 +34,8 @@ service NotetypesService {
   rpc UpdateCssBatch(UpdateCssBatchRequest) returns (UpdateCssBatchResponse);
   // Returns paged changes ordered by `(usn, notetype_id)`.
   // Cursor format: `"<usn>:<notetype_id>"`. Empty cursor starts from beginning.
-  rpc GetNotetypeChanges(GetNotetypeChangesRequest) returns (GetNotetypeChangesResponse);
+  rpc GetNotetypeChanges(GetNotetypeChangesRequest)
+      returns (GetNotetypeChangesResponse);
   // Returns the total number of notetypes.
   rpc CountNotetypes(CountNotetypesRequest) returns (CountNotetypesResponse);
 }

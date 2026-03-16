@@ -20,17 +20,6 @@ pub struct RuntimeOverrides {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct ProfileConfig {
-    pub host: Option<String>,
-    pub port: Option<u16>,
-    pub api_key: Option<String>,
-    pub anki_version: Option<String>,
-    pub auth_disabled: Option<bool>,
-    pub allow_non_local: Option<bool>,
-    pub allow_loopback_unauthenticated_health_check: Option<bool>,
-}
-
-#[derive(Clone, Debug, Default)]
 pub struct FileConfig {
     pub enabled: Option<bool>,
     pub host: Option<String>,
@@ -78,58 +67,37 @@ pub enum ConfigError {
 }
 
 impl ServerConfig {
-    pub fn resolve(
-        runtime: RuntimeOverrides,
-        file: FileConfig,
-        profile: ProfileConfig,
-    ) -> Result<Self, ConfigError> {
+    pub fn resolve(runtime: RuntimeOverrides, file: FileConfig) -> Result<Self, ConfigError> {
         let host = pick_value(
             runtime.host,
             env::var("ANKI_PUBLIC_API_HOST").ok(),
             file.host,
-            profile.host,
             DEFAULT_HOST.to_owned(),
         );
-        let port = pick_value(
-            runtime.port,
-            env_port()?,
-            file.port,
-            profile.port,
-            DEFAULT_PORT,
-        );
-        let api_key = pick_value(
-            runtime.api_key,
-            env_api_key()?,
-            file.api_key,
-            profile.api_key,
-            String::new(),
-        );
+        let port = pick_value(runtime.port, env_port()?, file.port, DEFAULT_PORT);
+        let api_key = pick_value(runtime.api_key, env_api_key()?, file.api_key, String::new());
         let anki_version = pick_value(
             runtime.anki_version,
             env::var("ANKI_PUBLIC_API_ANKI_VERSION").ok(),
             file.anki_version,
-            profile.anki_version,
             String::new(),
         );
         let auth_disabled = pick_value(
             runtime.auth_disabled,
             env_bool("ANKI_PUBLIC_API_AUTH_DISABLED")?,
             file.auth_disabled,
-            profile.auth_disabled,
             false,
         );
         let allow_non_local = pick_value(
             runtime.allow_non_local,
             env_bool("ANKI_PUBLIC_API_ALLOW_NON_LOCAL")?,
             file.allow_non_local,
-            profile.allow_non_local,
             false,
         );
         let allow_loopback_unauthenticated_health_check = pick_value(
             runtime.allow_loopback_unauthenticated_health_check,
             env_bool("ANKI_PUBLIC_API_ALLOW_LOOPBACK_HEALTH_WITHOUT_AUTH")?,
             file.allow_loopback_unauthenticated_health_check,
-            profile.allow_loopback_unauthenticated_health_check,
             false,
         );
 
@@ -233,14 +201,8 @@ fn env_api_key() -> Result<Option<String>, ConfigError> {
     }
 }
 
-fn pick_value<T>(
-    runtime: Option<T>,
-    env: Option<T>,
-    file: Option<T>,
-    profile: Option<T>,
-    default: T,
-) -> T {
-    runtime.or(env).or(file).or(profile).unwrap_or(default)
+fn pick_value<T>(runtime: Option<T>, env: Option<T>, file: Option<T>, default: T) -> T {
+    runtime.or(env).or(file).unwrap_or(default)
 }
 
 fn is_local_host(host: &str) -> bool {

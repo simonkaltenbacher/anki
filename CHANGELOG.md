@@ -5,6 +5,7 @@ This file tracks local changes on top of upstream Anki.
 ## 2026-03-05 (Unreleased)
 
 ### Added
+
 - [api] Added API workspace crates: `api/anki-api-proto`, `api/anki-api`, and `api/anki-api-client`.
 - [api] Added gRPC API server wiring for auth, health, system, notes, and notetypes services.
 - [api-client] Added high-level `ApiClient` with auth injection, capability bootstrap/parsing, typed error mapping (including version conflicts), and streaming wrappers.
@@ -39,6 +40,7 @@ This file tracks local changes on top of upstream Anki.
   `qt/launcher/mac/build-local.sh` and `qt/launcher/mac/pyproject.local.toml`.
 
 ### Changed
+
 - [api] Consolidated server config resolution semantics to runtime > env > file > profile > defaults.
 - [qt] Consolidated API startup gating into a resolved `api_server_enabled` flow (`ANKI_PUBLIC_API_ENABLED` over profile key).
 - [rslib] Changed notes change mapping to avoid truncating cast (`mtime_secs: mtime_secs.0`).
@@ -50,6 +52,7 @@ This file tracks local changes on top of upstream Anki.
 - [launcher/mac] Direct terminal invocation now keeps Anki attached after install/update so stdout/stderr logs remain visible; Finder-style launches still detach.
 
 ### Fixed
+
 - [launcher] Prevented startup crash on malformed locale data by replacing panic-prone locale detection path.
 - [launcher] Added compatibility fallback when Python expects newer rsbridge API config helpers than the loaded backend exposes.
 - [rslib] Added defensive cursor conversion by clamping `after_usn` (`int64`) to `i32` range before constructing `Usn` (notes + notetypes).
@@ -57,12 +60,15 @@ This file tracks local changes on top of upstream Anki.
 - [launcher/mac] Suppressed detached-launch messaging when the launcher will exec Anki directly in the current terminal.
 
 ### Security
+
 - [api] API keys are no longer read from profile config; API key remains env/runtime supplied (`ANKI_PUBLIC_API_KEY`).
 
 ### Docs
+
 - [docs] Expanded `docs/api-v1.md` with configuration documentation:
   source precedence, env/profile key tables, startup enable semantics, API key security note, and macOS launcher usage.
 
 ### Follow-up
+
 - [rslib] TODOs added in change-page SQL for possible composite indexes:
   `notes(usn, id)` and `notetypes(usn, id)`.

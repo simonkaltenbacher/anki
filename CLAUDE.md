@@ -85,12 +85,12 @@ in build scripts/tests is fine.
 
 ## Additional Build Commands
 
-| Command | Purpose |
-|---------|---------|
-| `./ninja format` | Format all code (Rust, Python, TypeScript) |
-| `./ninja fix` | Fix ruff/eslint/copyright header issues |
-| `cargo clippy --fix` | Fix Rust clippy issues |
-| `./run` | Build and run Anki in dev mode (sets ANKIDEV=1) |
+| Command                       | Purpose                                                         |
+| ----------------------------- | --------------------------------------------------------------- |
+| `./ninja format`              | Format all code (Rust, Python, TypeScript)                      |
+| `./ninja fix`                 | Fix ruff/eslint/copyright header issues                         |
+| `cargo clippy --fix`          | Fix Rust clippy issues                                          |
+| `./run`                       | Build and run Anki in dev mode (sets ANKIDEV=1)                 |
 | `./ninja check:svelte:editor` | Run a specific check target (use target name from check output) |
 
 ## Testing
@@ -103,6 +103,7 @@ in build scripts/tests is fine.
 ## Translation Access Patterns
 
 Assuming a string `addons-you-have-count` has been added to addons.ftl:
+
 - **Python:** `from aqt.utils import tr; tr.addons_you_have_count(count=3)`
 - **TypeScript:** `import * as tr from "@generated/ftl"; tr.addonsYouHaveCount({count: 3})`
 - **Rust:** `collection.tr.addons_you_have_count(3)`

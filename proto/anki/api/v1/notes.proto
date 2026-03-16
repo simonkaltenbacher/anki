@@ -22,11 +22,13 @@ service NotesService {
   // Server resolves names to notetype ordinals and merges into current values.
   // If `expected_usn` is set and stale, returns `ABORTED` with
   // `ErrorDetail.code=VERSION_CONFLICT`.
-  rpc UpdateNoteFields(UpdateNoteFieldsRequest) returns (UpdateNoteFieldsResponse);
+  rpc UpdateNoteFields(UpdateNoteFieldsRequest)
+      returns (UpdateNoteFieldsResponse);
   // Batch updates are not atomic. Updates are applied in request order and
   // processing stops on the first error. Earlier successful updates are not
   // rolled back. `results.len()` indicates successful prefix length.
-  rpc UpdateNoteFieldsBatch(UpdateNoteFieldsBatchRequest) returns (UpdateNoteFieldsBatchResponse);
+  rpc UpdateNoteFieldsBatch(UpdateNoteFieldsBatchRequest)
+      returns (UpdateNoteFieldsBatchResponse);
   // Returns paged changes ordered by `(usn, note_id)`.
   // Cursor format: `"<usn>:<note_id>"`. Empty cursor starts from beginning.
   rpc GetNoteChanges(GetNoteChangesRequest) returns (GetNoteChangesResponse);

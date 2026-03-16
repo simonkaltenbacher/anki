@@ -260,13 +260,7 @@ impl BackendStore {
         Ok(response
             .entries
             .into_iter()
-            .map(|entry| {
-                (
-                    i64::from(entry.usn),
-                    entry.note_id,
-                    entry.mtime_secs,
-                )
-            })
+            .map(|entry| (i64::from(entry.usn), entry.note_id, entry.mtime_secs))
             .collect())
     }
 

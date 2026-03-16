@@ -808,29 +808,6 @@ class AnkiQt(QMainWindow):
             showWarning(tr.qt_misc_your_collection_file_appears_to_be())
 
     def _start_api_server(self) -> None:
-        profile = self.pm.profile or {}
-
-        def profile_bool(name: str) -> bool | None:
-            value = profile.get(name)
-            if isinstance(value, bool):
-                return value
-            return None
-
-        def profile_int(name: str) -> int | None:
-            value = profile.get(name)
-            if isinstance(value, int) and value > 0:
-                return value
-            return None
-
-        def profile_str(name: str) -> str | None:
-            value = profile.get(name)
-            if isinstance(value, str):
-                value = value.strip()
-                if value:
-                    return value
-            return None
-
-        profile_anki_public_api_enabled = profile_bool("anki_public_api_enabled")
         env_anki_public_api_enabled = _env_bool("ANKI_PUBLIC_API_ENABLED")
         if hasattr(self.backend, "api_server_file_config_status"):
             file_anki_public_api_enabled, file_configured = (
@@ -843,72 +820,19 @@ class AnkiQt(QMainWindow):
         api_server_enabled = (
             env_anki_public_api_enabled
             if env_anki_public_api_enabled is not None
-            else (
-                profile_anki_public_api_enabled
-                if profile_anki_public_api_enabled is not None
-                else (
-                    file_anki_public_api_enabled
-                    if file_anki_public_api_enabled is not None
-                    else False
-                )
-            )
-        )
-        profile_host = profile_str("anki_public_api_host")
-        profile_port = profile_int("anki_public_api_port")
-        profile_auth_disabled = profile_bool("anki_public_api_auth_disabled")
-        profile_allow_non_local = profile_bool("anki_public_api_allow_non_local")
-        profile_allow_loopback_unauthenticated_health_check = profile_bool(
-            "anki_public_api_allow_loopback_unauthenticated_health_check"
-        )
-        profile_configured = any(
-            value is not None
-            for value in (
-                profile_host,
-                profile_port,
-                profile_auth_disabled,
-                profile_allow_non_local,
-                profile_allow_loopback_unauthenticated_health_check,
-            )
+            else file_anki_public_api_enabled
         )
         if api_server_enabled is False and (
             env_anki_public_api_enabled is not None
-            or profile_anki_public_api_enabled is not None
             or file_anki_public_api_enabled is not None
         ):
             return
-        if not api_server_enabled and not profile_configured and not file_configured:
+        if not api_server_enabled and not file_configured:
             return
-
-        host = os.environ.get("ANKI_PUBLIC_API_HOST") or None
-        port_value = os.environ.get("ANKI_PUBLIC_API_PORT")
-        port: int | None = None
-        if port_value:
-            try:
-                port = int(port_value)
-            except ValueError:
-                print(f"invalid ANKI_PUBLIC_API_PORT value: {port_value}")
-                return
-        api_key = os.environ.get("ANKI_PUBLIC_API_KEY") or None
 
         try:
             self.backend.start_api_server(
-                host=host,
-                port=port,
-                api_key=api_key,
                 anki_version=anki.buildinfo.version,
-                auth_disabled=_env_bool("ANKI_PUBLIC_API_AUTH_DISABLED"),
-                allow_non_local=_env_bool("ANKI_PUBLIC_API_ALLOW_NON_LOCAL"),
-                allow_loopback_unauthenticated_health_check=_env_bool(
-                    "ANKI_PUBLIC_API_ALLOW_LOOPBACK_HEALTH_WITHOUT_AUTH"
-                ),
-                profile_host=profile_host,
-                profile_port=profile_port,
-                profile_anki_version=anki.buildinfo.version,
-                profile_auth_disabled=profile_auth_disabled,
-                profile_allow_non_local=profile_allow_non_local,
-                profile_allow_loopback_unauthenticated_health_check=(
-                    profile_allow_loopback_unauthenticated_health_check
-                ),
             )
         except Exception:
             print("failed to start anki api server:")

@@ -6,7 +6,6 @@ use anki::backend::Backend as RustBackend;
 use anki::log::set_global_logger;
 use anki::sync::http_server::SimpleServer;
 use anki_api::config::FileConfig;
-use anki_api::config::ProfileConfig;
 use anki_api::config::RuntimeOverrides;
 use anki_api::config::ServerConfig;
 use anki_api::grpc;
@@ -16,6 +15,7 @@ use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use pyo3::types::PyDict;
 use pyo3::wrap_pyfunction;
 use std::sync::mpsc;
 use std::sync::Mutex;
@@ -73,37 +73,8 @@ impl Backend {
         Ok((file_config.enabled, file_config.has_runtime_fields_set()))
     }
 
-    #[pyo3(signature = (
-        host=None,
-        port=None,
-        api_key=None,
-        anki_version=None,
-        auth_disabled=None,
-        allow_non_local=None,
-        allow_loopback_unauthenticated_health_check=None,
-        profile_host=None,
-        profile_port=None,
-        profile_anki_version=None,
-        profile_auth_disabled=None,
-        profile_allow_non_local=None,
-        profile_allow_loopback_unauthenticated_health_check=None
-    ))]
-    fn start_api_server(
-        &self,
-        host: Option<String>,
-        port: Option<u16>,
-        api_key: Option<String>,
-        anki_version: Option<String>,
-        auth_disabled: Option<bool>,
-        allow_non_local: Option<bool>,
-        allow_loopback_unauthenticated_health_check: Option<bool>,
-        profile_host: Option<String>,
-        profile_port: Option<u16>,
-        profile_anki_version: Option<String>,
-        profile_auth_disabled: Option<bool>,
-        profile_allow_non_local: Option<bool>,
-        profile_allow_loopback_unauthenticated_health_check: Option<bool>,
-    ) -> PyResult<()> {
+    #[pyo3(signature = (*, runtime_overrides=None))]
+    fn start_api_server(&self, runtime_overrides: Option<&Bound<'_, PyDict>>) -> PyResult<()> {
         let mut guard = self
             .api_server
             .lock()
@@ -114,29 +85,9 @@ impl Backend {
 
         let file_config =
             FileConfig::load_default().map_err(|err| PyException::new_err(err.to_string()))?;
-        let config = ServerConfig::resolve(
-            RuntimeOverrides {
-                host,
-                port,
-                api_key,
-                anki_version,
-                auth_disabled,
-                allow_non_local,
-                allow_loopback_unauthenticated_health_check,
-            },
-            file_config,
-            ProfileConfig {
-                host: profile_host,
-                port: profile_port,
-                api_key: None,
-                anki_version: profile_anki_version,
-                auth_disabled: profile_auth_disabled,
-                allow_non_local: profile_allow_non_local,
-                allow_loopback_unauthenticated_health_check:
-                    profile_allow_loopback_unauthenticated_health_check,
-            },
-        )
-        .map_err(|err| PyException::new_err(err.to_string()))?;
+        let runtime_overrides = parse_runtime_overrides(runtime_overrides)?;
+        let config = ServerConfig::resolve(runtime_overrides, file_config)
+            .map_err(|err| PyException::new_err(err.to_string()))?;
         logging::init_stderr_logging();
 
         let store = store::shared_store_from_backend(self.backend.clone());
@@ -232,6 +183,42 @@ impl Backend {
         let out_obj = PyBytes::new(py, &out_bytes);
         Ok(out_obj.into())
     }
+}
+
+fn extract_string(dict: Option<&Bound<'_, PyDict>>, key: &str) -> PyResult<Option<String>> {
+    match dict {
+        Some(dict) => dict.get_item(key)?.map(|value| value.extract()).transpose(),
+        None => Ok(None),
+    }
+}
+
+fn extract_u16(dict: Option<&Bound<'_, PyDict>>, key: &str) -> PyResult<Option<u16>> {
+    match dict {
+        Some(dict) => dict.get_item(key)?.map(|value| value.extract()).transpose(),
+        None => Ok(None),
+    }
+}
+
+fn extract_bool(dict: Option<&Bound<'_, PyDict>>, key: &str) -> PyResult<Option<bool>> {
+    match dict {
+        Some(dict) => dict.get_item(key)?.map(|value| value.extract()).transpose(),
+        None => Ok(None),
+    }
+}
+
+fn parse_runtime_overrides(dict: Option<&Bound<'_, PyDict>>) -> PyResult<RuntimeOverrides> {
+    Ok(RuntimeOverrides {
+        host: extract_string(dict, "host")?,
+        port: extract_u16(dict, "port")?,
+        api_key: extract_string(dict, "api_key")?,
+        anki_version: extract_string(dict, "anki_version")?,
+        auth_disabled: extract_bool(dict, "auth_disabled")?,
+        allow_non_local: extract_bool(dict, "allow_non_local")?,
+        allow_loopback_unauthenticated_health_check: extract_bool(
+            dict,
+            "allow_loopback_unauthenticated_health_check",
+        )?,
+    })
 }
 
 impl Drop for Backend {
