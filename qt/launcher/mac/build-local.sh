@@ -29,6 +29,22 @@ if [[ "${INSTALL_TO_APPLICATIONS:-1}" == "1" ]]; then
   UV_INSTALL_ROOT="${ANKI_LAUNCHER_VENV_ROOT:-$HOME/Library/Application Support/AnkiProgramFiles}"
   rm -rf "$TARGET_APP"
   ditto "$APP_LAUNCHER" "$TARGET_APP"
+
+  SRC_LAUNCHER="$APP_LAUNCHER/Contents/MacOS/launcher"
+  DST_LAUNCHER="$TARGET_APP/Contents/MacOS/launcher"
+  if ! cmp -s "$SRC_LAUNCHER" "$DST_LAUNCHER"; then
+    echo "error: installed launcher bundle does not match built bundle at $TARGET_APP" >&2
+    exit 1
+  fi
+
+  for wheel_path in "$WHEELS_DIR"/*.whl; do
+    wheel_name="$(basename "$wheel_path")"
+    if ! cmp -s "$wheel_path" "$TARGET_APP/Contents/Resources/wheels/$wheel_name"; then
+      echo "error: installed wheel does not match built wheel: $wheel_name" >&2
+      exit 1
+    fi
+  done
+
   "$LSREGISTER" -f "$TARGET_APP" >/dev/null 2>&1 || true
   rm -rf "$UV_INSTALL_ROOT/.venv"
   rm -f "$UV_INSTALL_ROOT/.sync_complete"

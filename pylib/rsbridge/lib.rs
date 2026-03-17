@@ -17,6 +17,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use pyo3::types::PyDict;
 use pyo3::wrap_pyfunction;
+use pyo3::FromPyObject;
 use std::sync::mpsc;
 use std::sync::Mutex;
 use std::thread::JoinHandle;
@@ -185,25 +186,36 @@ impl Backend {
     }
 }
 
-fn extract_string(dict: Option<&Bound<'_, PyDict>>, key: &str) -> PyResult<Option<String>> {
+fn extract_optional<'a, T>(dict: Option<&Bound<'a, PyDict>>, key: &str) -> PyResult<Option<T>>
+where
+    T: FromPyObject<'a>,
+{
     match dict {
-        Some(dict) => dict.get_item(key)?.map(|value| value.extract()).transpose(),
+        Some(dict) => dict
+            .get_item(key)?
+            .map(|value| {
+                if value.is_none() {
+                    Ok(None)
+                } else {
+                    value.extract().map(Some)
+                }
+            })
+            .transpose()
+            .map(Option::flatten),
         None => Ok(None),
     }
+}
+
+fn extract_string(dict: Option<&Bound<'_, PyDict>>, key: &str) -> PyResult<Option<String>> {
+    extract_optional(dict, key)
 }
 
 fn extract_u16(dict: Option<&Bound<'_, PyDict>>, key: &str) -> PyResult<Option<u16>> {
-    match dict {
-        Some(dict) => dict.get_item(key)?.map(|value| value.extract()).transpose(),
-        None => Ok(None),
-    }
+    extract_optional(dict, key)
 }
 
 fn extract_bool(dict: Option<&Bound<'_, PyDict>>, key: &str) -> PyResult<Option<bool>> {
-    match dict {
-        Some(dict) => dict.get_item(key)?.map(|value| value.extract()).transpose(),
-        None => Ok(None),
-    }
+    extract_optional(dict, key)
 }
 
 fn parse_runtime_overrides(dict: Option<&Bound<'_, PyDict>>) -> PyResult<RuntimeOverrides> {
