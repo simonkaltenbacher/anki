@@ -2,6 +2,20 @@
 
 This file tracks local changes on top of upstream Anki.
 
+## 2026-03-18 (Unreleased)
+
+### Added
+
+- [api] Added `created_at` to `anki.api.v1.Note` payloads for note read/list responses.
+
+### Changed
+
+- [api] Note payload mapping now derives `created_at` from note IDs while keeping existing note ordering behavior unchanged.
+
+### Fixed
+
+- [build] Restored `./ninja format` Rust formatting by removing the stale `cargo/format` working-directory override from the generated formatter action.
+
 ## 2026-03-16 (Unreleased)
 
 ### Added

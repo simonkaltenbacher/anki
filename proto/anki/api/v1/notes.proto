@@ -56,6 +56,7 @@ message Note {
   SortField sort_field = 5;
   google.protobuf.Timestamp modified_at = 6;
   int64 usn = 7;
+  google.protobuf.Timestamp created_at = 8;
 }
 
 message GetNoteRequest {

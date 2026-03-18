@@ -28,6 +28,7 @@ pub fn map_note(note: &BackendNote, notetype: &BackendNotetype) -> Result<ApiNot
         sort_field: Some(sort_field),
         modified_at: Some(common::timestamp_from_secs(note.mtime_secs.into())),
         usn: i64::from(note.usn),
+        created_at: Some(common::timestamp_from_millis(note.id)),
     })
 }
 
@@ -173,7 +174,7 @@ mod tests {
     #[test]
     fn map_note_orders_named_fields_by_ordinal() {
         let note = Note {
-            id: 1,
+            id: 1_234,
             notetype_id: 10,
             mtime_secs: 0,
             usn: 0,
@@ -203,6 +204,9 @@ mod tests {
         assert_eq!(mapped.fields[0].value, "front");
         assert_eq!(mapped.fields[1].name, "Back");
         assert_eq!(mapped.fields[1].value, "back");
+        let created_at = mapped.created_at.expect("created_at");
+        assert_eq!(created_at.seconds, 1);
+        assert_eq!(created_at.nanos, 234_000_000);
     }
 
     #[test]

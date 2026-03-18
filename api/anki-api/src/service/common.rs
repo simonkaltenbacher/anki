@@ -48,6 +48,13 @@ pub fn timestamp_from_secs(seconds: i64) -> Timestamp {
     Timestamp { seconds, nanos: 0 }
 }
 
+pub fn timestamp_from_millis(millis: i64) -> Timestamp {
+    Timestamp {
+        seconds: millis.div_euclid(1000),
+        nanos: (millis.rem_euclid(1000) as i32) * 1_000_000,
+    }
+}
+
 pub fn enforce_expected_usn(
     expected_usn: Option<i64>,
     actual_usn: i64,

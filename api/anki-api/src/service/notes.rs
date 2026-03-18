@@ -1181,6 +1181,22 @@ mod tests {
             .map(|note| note.note_id)
             .collect::<Vec<_>>();
         assert_eq!(ids, vec![note_b.id, note_a.id]);
+        assert_eq!(
+            response.notes[0]
+                .created_at
+                .as_ref()
+                .expect("created_at")
+                .seconds,
+            note_b.id / 1000
+        );
+        assert_eq!(
+            response.notes[1]
+                .created_at
+                .as_ref()
+                .expect("created_at")
+                .seconds,
+            note_a.id / 1000
+        );
     }
 
     #[tokio::test]
@@ -1219,6 +1235,14 @@ mod tests {
                 .collect::<Vec<_>>(),
             expected_names
         );
+        assert_eq!(
+            listed_first
+                .created_at
+                .as_ref()
+                .expect("created_at")
+                .seconds,
+            note.id / 1000
+        );
 
         let mut filtered = <NotesApi as NotesService>::list_notes(
             &api,
@@ -1246,6 +1270,14 @@ mod tests {
                 .map(|field| field.name.clone())
                 .collect::<Vec<_>>(),
             expected_names
+        );
+        assert_eq!(
+            filtered_first
+                .created_at
+                .as_ref()
+                .expect("created_at")
+                .seconds,
+            note.id / 1000
         );
     }
 

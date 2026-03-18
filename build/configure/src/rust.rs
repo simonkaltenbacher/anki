@@ -179,7 +179,7 @@ pub fn check_rust(build: &mut Build) -> Result<()> {
         CargoFormat {
             inputs: inputs.clone(),
             check_only: true,
-            working_dir: Some("cargo/format"),
+            working_dir: None,
         },
     )?;
     build.add_action(
@@ -187,7 +187,7 @@ pub fn check_rust(build: &mut Build) -> Result<()> {
         CargoFormat {
             inputs: inputs.clone(),
             check_only: false,
-            working_dir: Some("cargo/format"),
+            working_dir: None,
         },
     )?;
 
