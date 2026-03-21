@@ -189,58 +189,77 @@ Batch RPCs:
 2. `Notetypes.UpdateTemplatesBatch`
 3. `Notetypes.UpdateCssBatch`
 
+Batch create semantics are different:
+
+1. `Notes.CreateNotes` is atomic and all-or-nothing.
+2. Request items are prepared and inserted in request order.
+3. If any item fails, the RPC returns an error and no notes from the batch are created.
+4. On success, `CreateNotesResponse.notes` returns full created note payloads in request order.
+5. Validation failures include a batch index when available.
+6. Backend insertion failures may not identify the specific item that caused the batch to fail.
+
 ## Capabilities
 
 Current server capability keys:
 
 1. `health.check`
 2. `system.server_info`
-3. `notes.get`
-4. `notes.get.batch`
-5. `notes.list_refs.stream`
-6. `notes.list.stream`
-7. `notes.update_fields`
-8. `notes.update_fields.batch`
-9. `notes.changes`
-10. `notes.count`
-11. `notetypes.get`
-12. `notetypes.get.batch`
-13. `notetypes.get_id_by_name`
-14. `notetypes.list_refs`
-15. `notetypes.list`
-16. `notetypes.update_content`
-17. `notetypes.update_templates`
-18. `notetypes.update_templates.batch`
-19. `notetypes.update_css`
-20. `notetypes.update_css.batch`
-21. `notetypes.changes`
-22. `notetypes.count`
-23. `auth.api_key` (only when auth is enabled)
+3. `decks.list_refs`
+4. `decks.get_id_by_name`
+5. `notes.get`
+6. `notes.get.batch`
+7. `notes.create`
+8. `notes.create.batch`
+9. `notes.delete`
+10. `notes.list_refs.stream`
+11. `notes.list.stream`
+12. `notes.update_fields`
+13. `notes.update_fields.batch`
+14. `notes.changes`
+15. `notes.count`
+16. `notetypes.get`
+17. `notetypes.get.batch`
+18. `notetypes.get_id_by_name`
+19. `notetypes.list_refs`
+20. `notetypes.list`
+21. `notetypes.update_content`
+22. `notetypes.update_templates`
+23. `notetypes.update_templates.batch`
+24. `notetypes.update_css`
+25. `notetypes.update_css.batch`
+26. `notetypes.changes`
+27. `notetypes.count`
+28. `auth.api_key` (only when auth is enabled)
 
 ## RPC Set (Current V1)
 
 1. `HealthService.Check`
 2. `SystemService.GetServerInfo`
-3. `NotesService.GetNote`
-4. `NotesService.GetNotes`
-5. `NotesService.ListNoteRefs` (server-streaming)
-6. `NotesService.ListNotes` (server-streaming)
-7. `NotesService.UpdateNoteFields`
-8. `NotesService.UpdateNoteFieldsBatch`
-9. `NotesService.GetNoteChanges`
-10. `NotesService.CountNotes`
-11. `NotetypesService.ListNotetypeRefs`
-12. `NotetypesService.ListNotetypes`
-13. `NotetypesService.GetNotetype`
-14. `NotetypesService.GetNotetypes`
-15. `NotetypesService.GetNotetypeIdByName`
-16. `NotetypesService.UpdateNotetypeContent`
-17. `NotetypesService.UpdateTemplates`
-18. `NotetypesService.UpdateTemplatesBatch`
-19. `NotetypesService.UpdateCss`
-20. `NotetypesService.UpdateCssBatch`
-21. `NotetypesService.GetNotetypeChanges`
-22. `NotetypesService.CountNotetypes`
+3. `DecksService.ListDeckRefs`
+4. `DecksService.GetDeckIdByName`
+5. `NotesService.GetNote`
+6. `NotesService.GetNotes`
+7. `NotesService.CreateNote`
+8. `NotesService.CreateNotes`
+9. `NotesService.DeleteNotes`
+10. `NotesService.ListNoteRefs` (server-streaming)
+11. `NotesService.ListNotes` (server-streaming)
+12. `NotesService.UpdateNoteFields`
+13. `NotesService.UpdateNoteFieldsBatch`
+14. `NotesService.GetNoteChanges`
+15. `NotesService.CountNotes`
+16. `NotetypesService.ListNotetypeRefs`
+17. `NotetypesService.ListNotetypes`
+18. `NotetypesService.GetNotetype`
+19. `NotetypesService.GetNotetypes`
+20. `NotetypesService.GetNotetypeIdByName`
+21. `NotetypesService.UpdateNotetypeContent`
+22. `NotetypesService.UpdateTemplates`
+23. `NotetypesService.UpdateTemplatesBatch`
+24. `NotetypesService.UpdateCss`
+25. `NotetypesService.UpdateCssBatch`
+26. `NotetypesService.GetNotetypeChanges`
+27. `NotetypesService.CountNotetypes`
 
 ## Health Endpoints
 

@@ -8,6 +8,8 @@ use anki_api_proto::anki::api::v1::CountNotesRequest;
 use anki_api_proto::anki::api::v1::CountNotesResponse;
 use anki_api_proto::anki::api::v1::CreateNoteRequest;
 use anki_api_proto::anki::api::v1::CreateNoteResponse;
+use anki_api_proto::anki::api::v1::CreateNotesRequest;
+use anki_api_proto::anki::api::v1::CreateNotesResponse;
 use anki_api_proto::anki::api::v1::DeleteNotesRequest;
 use anki_api_proto::anki::api::v1::DeleteNotesResponse;
 use anki_api_proto::anki::api::v1::GetNoteChangesRequest;
@@ -32,6 +34,7 @@ use anki_api_proto::anki::api::v1::UpdateNoteFieldsRequest;
 use anki_api_proto::anki::api::v1::UpdateNoteFieldsResponse;
 use anki_api_proto::anki::api::v1::create_note_request::Deck;
 use anki_api_proto::anki::api::v1::notes_service_server::NotesService;
+use anki_proto::notes::AddNoteRequest as BackendAddNoteRequest;
 use anki_proto::search::SortOrder as BackendSortOrder;
 use anki_proto::search::sort_order::Value as BackendSortOrderValue;
 use futures::Stream;
@@ -50,6 +53,7 @@ pub struct NotesApi {
 }
 
 type NotetypeCache = HashMap<i64, anki_proto::notetypes::Notetype>;
+type DeckCache = HashMap<String, i64>;
 pub struct ListNotesStream {
     receiver: mpsc::Receiver<Result<ListNotesResponse, Status>>,
 }
@@ -129,8 +133,57 @@ impl NotesService for NotesApi {
         request: Request<CreateNoteRequest>,
     ) -> Result<Response<CreateNoteResponse>, Status> {
         let mut notetype_cache = NotetypeCache::default();
-        let response = create_note_inner(&self.store, request.into_inner(), &mut notetype_cache)?;
+        let mut deck_cache = DeckCache::default();
+        let response = create_note_inner(
+            &self.store,
+            request.into_inner(),
+            &mut notetype_cache,
+            &mut deck_cache,
+        )?;
         Ok(Response::new(response))
+    }
+
+    async fn create_notes(
+        &self,
+        request: Request<CreateNotesRequest>,
+    ) -> Result<Response<CreateNotesResponse>, Status> {
+        let requests = request.into_inner().requests;
+        if requests.is_empty() {
+            return Err(Status::invalid_argument("requests must not be empty"));
+        }
+
+        let mut notetype_cache = NotetypeCache::default();
+        let mut deck_cache = DeckCache::default();
+        let mut add_requests = Vec::with_capacity(requests.len());
+
+        for (index, request) in requests.into_iter().enumerate() {
+            let (fields, deck_id, notetype_id) = prepare_create_note_fields_and_deck(
+                &self.store,
+                request,
+                &mut notetype_cache,
+                &mut deck_cache,
+            )
+            .map_err(|status| common::annotate_batch_status(status, "create_notes", index))?;
+            let mut note = self
+                .store
+                .new_note(notetype_id)
+                .map_err(|status| common::annotate_batch_status(status, "create_notes", index))?;
+            note.fields = fields;
+            add_requests.push(BackendAddNoteRequest {
+                note: Some(note),
+                deck_id,
+            });
+        }
+
+        let note_ids = self.store.add_notes(add_requests)?;
+        let mut notes = Vec::with_capacity(note_ids.len());
+        for note_id in note_ids {
+            let note = self.store.get_note(note_id)?;
+            let notetype = notetype_cache.get_or_load(&self.store, note.notetype_id)?;
+            notes.push(adapter::map_note(&note, &notetype)?);
+        }
+
+        Ok(Response::new(CreateNotesResponse { notes }))
     }
 
     async fn delete_notes(
@@ -442,7 +495,24 @@ fn create_note_inner(
     store: &SharedStore,
     request: CreateNoteRequest,
     notetype_cache: &mut NotetypeCache,
+    deck_cache: &mut DeckCache,
 ) -> Result<CreateNoteResponse, Status> {
+    let (fields, deck_id, notetype_id) =
+        prepare_create_note_fields_and_deck(store, request, notetype_cache, deck_cache)?;
+    let note = store.create_note(notetype_id, deck_id, fields)?;
+    let updated_notetype = notetype_cache.get_or_load(store, note.notetype_id)?;
+
+    Ok(CreateNoteResponse {
+        note: Some(adapter::map_note(&note, &updated_notetype)?),
+    })
+}
+
+fn prepare_create_note_fields_and_deck(
+    store: &SharedStore,
+    request: CreateNoteRequest,
+    notetype_cache: &mut NotetypeCache,
+    deck_cache: &mut DeckCache,
+) -> Result<(Vec<String>, i64, i64), Status> {
     if request.notetype_id <= 0 {
         return Err(Status::invalid_argument("notetype_id must be > 0"));
     }
@@ -485,38 +555,44 @@ fn create_note_inner(
         )));
     }
 
-    let deck_id = match request.deck {
+    let deck_id = resolve_create_note_deck_id(store, request.deck, deck_cache)?;
+    Ok((
+        fields
+            .into_iter()
+            .map(|value| value.expect("missing fields rejected above"))
+            .collect(),
+        deck_id,
+        request.notetype_id,
+    ))
+}
+
+fn resolve_create_note_deck_id(
+    store: &SharedStore,
+    deck: Option<Deck>,
+    deck_cache: &mut DeckCache,
+) -> Result<i64, Status> {
+    match deck {
         Some(Deck::DeckId(deck_id)) => {
             if deck_id <= 0 {
                 return Err(Status::invalid_argument("deck_id must be > 0"));
             }
-            deck_id
+            Ok(deck_id)
         }
         Some(Deck::DeckName(deck_name)) => {
             if deck_name.trim().is_empty() {
                 return Err(Status::invalid_argument("deck_name must not be empty"));
             }
-            store.get_deck_id_by_name(&deck_name)?
+            if let Some(deck_id) = deck_cache.get(&deck_name) {
+                return Ok(*deck_id);
+            }
+            let deck_id = store.get_deck_id_by_name(&deck_name)?;
+            deck_cache.insert(deck_name, deck_id);
+            Ok(deck_id)
         }
-        None => {
-            return Err(Status::invalid_argument(
-                "exactly one deck selector must be provided",
-            ));
-        }
-    };
-    let note = store.create_note(
-        request.notetype_id,
-        deck_id,
-        fields
-            .into_iter()
-            .map(|value| value.expect("missing fields rejected above"))
-            .collect(),
-    )?;
-    let updated_notetype = notetype_cache.get_or_load(store, note.notetype_id)?;
-
-    Ok(CreateNoteResponse {
-        note: Some(adapter::map_note(&note, &updated_notetype)?),
-    })
+        None => Err(Status::invalid_argument(
+            "exactly one deck selector must be provided",
+        )),
+    }
 }
 
 trait NotetypeLookup {
@@ -560,6 +636,23 @@ mod tests {
         NoteOrdering {
             column: column as i32,
             direction: direction as i32,
+        }
+    }
+
+    fn basic_create_request(front: &str, back: &str) -> CreateNoteRequest {
+        CreateNoteRequest {
+            notetype_id: 0,
+            deck: Some(Deck::DeckName("Default".to_owned())),
+            fields: vec![
+                NoteFieldUpdate {
+                    name: "Front".to_owned(),
+                    value: front.to_owned(),
+                },
+                NoteFieldUpdate {
+                    name: "Back".to_owned(),
+                    value: back.to_owned(),
+                },
+            ],
         }
     }
 
@@ -1051,6 +1144,120 @@ mod tests {
 
         assert_eq!(status.code(), Code::InvalidArgument);
         assert!(status.message().contains("deck selector"));
+    }
+
+    #[tokio::test]
+    async fn create_notes_returns_created_notes_in_request_order() {
+        let fixture = TestStore::new("notes-create-batch-success");
+        let store = fixture.store();
+        let api = NotesApi::new(store.clone());
+        let notetype_id = store
+            .get_notetype_id_by_name("Basic")
+            .expect("basic notetype");
+
+        let response = <NotesApi as NotesService>::create_notes(
+            &api,
+            Request::new(CreateNotesRequest {
+                requests: vec![
+                    CreateNoteRequest {
+                        notetype_id,
+                        ..basic_create_request("batch-front-1", "batch-back-1")
+                    },
+                    CreateNoteRequest {
+                        notetype_id,
+                        ..basic_create_request("batch-front-2", "batch-back-2")
+                    },
+                ],
+            }),
+        )
+        .await
+        .expect("create notes")
+        .into_inner();
+
+        assert_eq!(response.notes.len(), 2);
+        assert_eq!(response.notes[0].fields[0].value, "batch-front-1");
+        assert_eq!(response.notes[0].fields[1].value, "batch-back-1");
+        assert_eq!(response.notes[1].fields[0].value, "batch-front-2");
+        assert_eq!(response.notes[1].fields[1].value, "batch-back-2");
+        assert!(response.notes[0].sort_field.is_some());
+        assert!(response.notes[1].sort_field.is_some());
+        assert!(response.notes[0].note_id > 0);
+        assert!(response.notes[1].note_id > 0);
+
+        let count = <NotesApi as NotesService>::count_notes(
+            &api,
+            Request::new(CountNotesRequest {
+                query: String::new(),
+            }),
+        )
+        .await
+        .expect("count notes")
+        .into_inner();
+        assert_eq!(count.count, 2);
+    }
+
+    #[tokio::test]
+    async fn create_notes_rejects_empty_requests() {
+        let fixture = TestStore::new("notes-create-batch-empty");
+        let api = NotesApi::new(fixture.store());
+
+        let status = <NotesApi as NotesService>::create_notes(
+            &api,
+            Request::new(CreateNotesRequest {
+                requests: Vec::new(),
+            }),
+        )
+        .await
+        .expect_err("empty batch should fail");
+
+        assert_eq!(status.code(), Code::InvalidArgument);
+        assert!(status.message().contains("requests must not be empty"));
+    }
+
+    #[tokio::test]
+    async fn create_notes_reports_validation_failure_with_batch_index_and_rolls_back() {
+        let fixture = TestStore::new("notes-create-batch-validation-failure");
+        let store = fixture.store();
+        let api = NotesApi::new(store.clone());
+        let notetype_id = store
+            .get_notetype_id_by_name("Basic")
+            .expect("basic notetype");
+
+        let status = <NotesApi as NotesService>::create_notes(
+            &api,
+            Request::new(CreateNotesRequest {
+                requests: vec![
+                    CreateNoteRequest {
+                        notetype_id,
+                        ..basic_create_request("valid-front", "valid-back")
+                    },
+                    CreateNoteRequest {
+                        notetype_id,
+                        deck: Some(Deck::DeckName("Default".to_owned())),
+                        fields: vec![NoteFieldUpdate {
+                            name: "Front".to_owned(),
+                            value: "missing-back".to_owned(),
+                        }],
+                    },
+                ],
+            }),
+        )
+        .await
+        .expect_err("invalid batch should fail");
+
+        assert_eq!(status.code(), Code::InvalidArgument);
+        assert!(status.message().contains("batch index 1"));
+
+        let count = <NotesApi as NotesService>::count_notes(
+            &api,
+            Request::new(CountNotesRequest {
+                query: String::new(),
+            }),
+        )
+        .await
+        .expect("count notes")
+        .into_inner();
+        assert_eq!(count.count, 0);
     }
 
     #[tokio::test]

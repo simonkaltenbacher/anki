@@ -15,6 +15,8 @@ use anki_proto::decks::GetDeckNamesRequest;
 use anki_proto::generic::String as GenericString;
 use anki_proto::notes::AddNoteRequest;
 use anki_proto::notes::AddNoteResponse;
+use anki_proto::notes::AddNotesRequest;
+use anki_proto::notes::AddNotesResponse;
 use anki_proto::notes::GetNoteChangesPageRequest;
 use anki_proto::notes::GetNoteChangesPageResponse;
 use anki_proto::notes::Note;
@@ -54,6 +56,7 @@ const METHOD_NOTETYPES_GET_ID_BY_NAME: u32 = 10;
 const METHOD_NOTETYPES_UPDATE: u32 = 1;
 const METHOD_NOTES_NEW: u32 = 0;
 const METHOD_NOTES_ADD: u32 = 1;
+const METHOD_NOTES_ADD_BATCH: u32 = 2;
 #[cfg(test)]
 const METHOD_NOTES_DEFAULTS_FOR_ADDING: u32 = 3;
 const METHOD_NOTES_UPDATE: u32 = 5;
@@ -203,11 +206,7 @@ impl BackendStore {
         deck_id: i64,
         fields: Vec<String>,
     ) -> Result<Note, Status> {
-        let mut note: Note = self.run_method(
-            SERVICE_NOTES,
-            METHOD_NOTES_NEW,
-            Some(NotetypeId { ntid: notetype_id }),
-        )?;
+        let mut note = self.new_note(notetype_id)?;
         note.fields = fields;
 
         let added: AddNoteResponse = self.run_method(
@@ -220,6 +219,23 @@ impl BackendStore {
         )?;
 
         self.get_note(added.note_id)
+    }
+
+    pub fn new_note(&self, notetype_id: i64) -> Result<Note, Status> {
+        self.run_method(
+            SERVICE_NOTES,
+            METHOD_NOTES_NEW,
+            Some(NotetypeId { ntid: notetype_id }),
+        )
+    }
+
+    pub fn add_notes(&self, requests: Vec<AddNoteRequest>) -> Result<Vec<i64>, Status> {
+        let response: AddNotesResponse = self.run_method(
+            SERVICE_NOTES,
+            METHOD_NOTES_ADD_BATCH,
+            Some(AddNotesRequest { requests }),
+        )?;
+        Ok(response.nids)
     }
 
     pub fn delete_notes(&self, note_ids: Vec<i64>) -> Result<u32, Status> {
@@ -417,6 +433,53 @@ fn status_from_backend_error_bytes(err_bytes: Vec<u8>) -> Status {
             );
             Status::internal("backend call failed")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::service::common::TestStore;
+
+    #[test]
+    fn add_notes_rolls_back_when_a_later_item_fails() {
+        let fixture = TestStore::new("store-add-notes-rollback");
+        let store = fixture.store();
+        let notetype_id = store
+            .get_notetype_id_by_name("Basic")
+            .expect("basic notetype");
+        let deck_id = store.get_deck_id_by_name("Default").expect("default deck");
+
+        let mut valid_note = store.new_note(notetype_id).expect("new note");
+        valid_note.fields[0] = "valid-front".to_owned();
+        valid_note.fields[1] = "valid-back".to_owned();
+
+        let mut invalid_note = store.new_note(notetype_id).expect("new note");
+        invalid_note.notetype_id = i64::MAX;
+        invalid_note.fields[0] = "invalid-front".to_owned();
+        invalid_note.fields[1] = "invalid-back".to_owned();
+
+        let error = store
+            .add_notes(vec![
+                AddNoteRequest {
+                    note: Some(valid_note),
+                    deck_id,
+                },
+                AddNoteRequest {
+                    note: Some(invalid_note),
+                    deck_id,
+                },
+            ])
+            .expect_err("batch add should fail");
+
+        assert!(matches!(
+            error.code(),
+            tonic::Code::NotFound | tonic::Code::InvalidArgument
+        ));
+        let note_ids = store
+            .search_note_ids_with_query("", None)
+            .expect("search notes after rollback");
+        assert_eq!(note_ids.len(), 0);
     }
 }
 

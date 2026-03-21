@@ -72,6 +72,7 @@ pub enum Capability {
     NotesGet,
     NotesGetBatch,
     NotesCreate,
+    NotesCreateBatch,
     NotesDelete,
     NotesListRefsStream,
     NotesListStream,
@@ -104,6 +105,7 @@ impl Capability {
             "notes.get" => Some(Self::NotesGet),
             "notes.get.batch" => Some(Self::NotesGetBatch),
             "notes.create" => Some(Self::NotesCreate),
+            "notes.create.batch" => Some(Self::NotesCreateBatch),
             "notes.delete" => Some(Self::NotesDelete),
             "notes.list_refs.stream" => Some(Self::NotesListRefsStream),
             "notes.list.stream" => Some(Self::NotesListStream),
@@ -365,6 +367,21 @@ impl ApiClient {
         })?;
         let response = client
             .create_note(request)
+            .await
+            .map_err(Self::map_status)?
+            .into_inner();
+        Ok(response)
+    }
+
+    /// Creates multiple notes atomically in request order.
+    pub async fn create_notes(
+        &self,
+        requests: Vec<v1::CreateNoteRequest>,
+    ) -> Result<v1::CreateNotesResponse, ClientError> {
+        let mut client = NotesClient::new(self.channel.clone());
+        let request = self.request(v1::CreateNotesRequest { requests })?;
+        let response = client
+            .create_notes(request)
             .await
             .map_err(Self::map_status)?
             .into_inner();
@@ -855,6 +872,12 @@ mod tests {
     fn parses_notes_create_capability() {
         let caps = parse_capabilities(&["notes.create".to_owned()]);
         assert!(caps.has(Capability::NotesCreate));
+    }
+
+    #[test]
+    fn parses_notes_create_batch_capability() {
+        let caps = parse_capabilities(&["notes.create.batch".to_owned()]);
+        assert!(caps.has(Capability::NotesCreateBatch));
     }
 
     #[test]

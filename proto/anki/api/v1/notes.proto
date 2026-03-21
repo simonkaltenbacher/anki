@@ -12,6 +12,12 @@ service NotesService {
   rpc GetNotes(GetNotesRequest) returns (GetNotesResponse);
   // Creates a new note in the provided deck using named field values.
   rpc CreateNote(CreateNoteRequest) returns (CreateNoteResponse);
+  // Creates multiple notes atomically in request order.
+  // If any item fails validation or backend insertion, the RPC fails and no
+  // notes from the batch are created. Validation failures are reported with a
+  // batch index when available. Backend insertion failures may not identify the
+  // specific item that caused the batch to fail.
+  rpc CreateNotes(CreateNotesRequest) returns (CreateNotesResponse);
   // Deletes one or more notes by ID.
   rpc DeleteNotes(DeleteNotesRequest) returns (DeleteNotesResponse);
   // Streams lightweight note references (id + sort field), optionally filtered.
@@ -89,6 +95,15 @@ message CreateNoteRequest {
 
 message CreateNoteResponse {
   Note note = 1;
+}
+
+message CreateNotesRequest {
+  repeated CreateNoteRequest requests = 1;
+}
+
+message CreateNotesResponse {
+  // Full created notes in request order.
+  repeated Note notes = 1;
 }
 
 message DeleteNotesRequest {
