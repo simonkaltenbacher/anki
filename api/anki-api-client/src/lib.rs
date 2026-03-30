@@ -27,6 +27,7 @@ use prost14::Message;
 use thiserror::Error;
 use tonic::metadata::Ascii;
 use tonic::metadata::MetadataValue;
+use tonic::transport::Channel;
 use tonic::Code;
 use tonic::Request;
 use tonic::Streaming;
@@ -36,24 +37,23 @@ mod transport;
 /// Raw tonic client for `HealthService`.
 ///
 /// Prefer [`ApiClient`] for auth injection, capability bootstrap, and typed errors.
-pub type HealthClient = v1::health_service_client::HealthServiceClient<tonic::transport::Channel>;
+pub type HealthClient = v1::health_service_client::HealthServiceClient<Channel>;
 /// Raw tonic client for `DecksService`.
 ///
 /// Prefer [`ApiClient`] for auth injection, capability bootstrap, and typed errors.
-pub type DecksClient = v1::decks_service_client::DecksServiceClient<tonic::transport::Channel>;
+pub type DecksClient = v1::decks_service_client::DecksServiceClient<Channel>;
 /// Raw tonic client for `SystemService`.
 ///
 /// Prefer [`ApiClient`] for auth injection, capability bootstrap, and typed errors.
-pub type SystemClient = v1::system_service_client::SystemServiceClient<tonic::transport::Channel>;
+pub type SystemClient = v1::system_service_client::SystemServiceClient<Channel>;
 /// Raw tonic client for `NotesService`.
 ///
 /// Prefer [`ApiClient`] for auth injection, capability bootstrap, and typed errors.
-pub type NotesClient = v1::notes_service_client::NotesServiceClient<tonic::transport::Channel>;
+pub type NotesClient = v1::notes_service_client::NotesServiceClient<Channel>;
 /// Raw tonic client for `NotetypesService`.
 ///
 /// Prefer [`ApiClient`] for auth injection, capability bootstrap, and typed errors.
-pub type NotetypesClient =
-    v1::notetypes_service_client::NotetypesServiceClient<tonic::transport::Channel>;
+pub type NotetypesClient = v1::notetypes_service_client::NotetypesServiceClient<Channel>;
 
 const AUTH_HEADER: &str = "authorization";
 const BEARER_PREFIX: &str = "Bearer ";
@@ -95,6 +95,7 @@ pub enum Capability {
     NotetypesChanges,
     NotetypesCount,
     AuthApiKey,
+    AuthSpiffeMtls,
 }
 
 impl Capability {
@@ -128,6 +129,7 @@ impl Capability {
             "notetypes.changes" => Some(Self::NotetypesChanges),
             "notetypes.count" => Some(Self::NotetypesCount),
             "auth.api_key" => Some(Self::AuthApiKey),
+            "auth.spiffe_mtls" => Some(Self::AuthSpiffeMtls),
             _ => None,
         }
     }
@@ -170,6 +172,7 @@ pub struct ConnectionConfig {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TransportConfig {
     Plaintext,
+    Tls,
     SpiffeMtls(SpiffeMtlsConfig),
 }
 
@@ -192,6 +195,12 @@ impl ConnectionConfig {
     /// Sets the API key used for bearer authentication.
     pub fn with_api_key(mut self, api_key: impl Into<String>) -> Self {
         self.api_key = Some(api_key.into());
+        self
+    }
+
+    /// Enables one-way TLS using the configured platform/webpki root store.
+    pub fn with_tls(mut self) -> Self {
+        self.transport = TransportConfig::Tls;
         self
     }
 
@@ -951,6 +960,12 @@ mod tests {
     }
 
     #[test]
+    fn connection_config_can_enable_tls_transport() {
+        let config = ConnectionConfig::new("https://127.0.0.1:50051").with_tls();
+        assert_eq!(config.transport, TransportConfig::Tls);
+    }
+
+    #[test]
     fn connection_config_debug_redacts_api_key() {
         let debug = format!(
             "{:?}",
@@ -980,6 +995,18 @@ mod tests {
             other => {
                 panic!("expected spiffe bootstrap-related error, got {other:?}");
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn tls_transport_dispatch_rejects_invalid_endpoint() {
+        let config = ConnectionConfig::new("https:// bad endpoint").with_tls();
+        let error = transport::connect_channel(&config)
+            .await
+            .expect_err("should fail");
+        match error {
+            ClientError::InvalidEndpoint(_) => {}
+            other => panic!("expected invalid endpoint error, got {other:?}"),
         }
     }
 }

@@ -18,19 +18,23 @@ use tonic::body::Body;
 use tonic::codegen::http::Request as HttpRequest;
 use tonic::codegen::http::Response as HttpResponse;
 use tonic::service::interceptor::InterceptedService;
+use tonic::transport::Identity;
 use tonic::transport::Server;
+use tonic::transport::ServerTlsConfig;
 use tonic_health::ServingStatus;
 use tower_http::trace::TraceLayer;
 use tracing::Span;
 
 use crate::auth::ApiKeyAuthenticator;
 use crate::config::ServerConfig;
+use crate::config::ServerTransportMode;
 use crate::service::decks::DecksApi;
 use crate::service::health::HealthApi;
 use crate::service::notes::NotesApi;
 use crate::service::notetypes::NotetypesApi;
 use crate::service::system::SystemApi;
 use crate::store;
+use crate::transport;
 
 pub async fn serve_with_store(
     config: ServerConfig,
@@ -123,10 +127,20 @@ where
     tracing::info!(
         address = %bind_addr,
         auth = if config.auth_disabled { "disabled" } else { "enabled" },
+        transport = match &config.transport_mode {
+            crate::config::ServerTransportMode::Plaintext => "plaintext",
+            crate::config::ServerTransportMode::Tls(_) => "tls",
+            crate::config::ServerTransportMode::Spiffe(_) => "spiffe",
+        },
         "starting anki api grpc server"
     );
-    if config.allow_non_local {
+    if config.allow_non_local && matches!(config.transport_mode, ServerTransportMode::Plaintext) {
         tracing::warn!("non-local binding enabled; terminate TLS at a reverse proxy");
+    }
+    if config.auth_disabled && matches!(config.transport_mode, ServerTransportMode::Tls(_)) {
+        tracing::warn!(
+            "tls transport is enabled with auth disabled; requests will not require an api key"
+        );
     }
 
     let listener = match TcpListener::bind(bind_addr).await {
@@ -143,55 +157,166 @@ where
     if let Some(tx) = ready_tx.take() {
         let _ = tx.send(Ok(()));
     }
-
-    Server::builder()
-        .layer(
-            TraceLayer::new_for_grpc()
-                .make_span_with(|request: &HttpRequest<Body>| {
-                    let user_agent = request
-                        .headers()
-                        .get("user-agent")
-                        .and_then(|value| value.to_str().ok())
-                        .unwrap_or("-");
-                    tracing::info_span!(
-                        "grpc_request",
-                        method = %request.uri().path(),
-                        user_agent = %user_agent
-                    )
-                })
-                .on_request(())
-                .on_response(
-                    |response: &HttpResponse<Body>, latency: Duration, _span: &Span| {
-                        let grpc_status = response
-                            .headers()
-                            .get("grpc-status")
-                            .and_then(|value| value.to_str().ok())
-                            .unwrap_or("0");
-                        tracing::debug!(
-                            latency_ms = latency.as_millis() as u64,
-                            grpc_status = grpc_status,
-                            "grpc request completed"
-                        );
-                    },
+    match &config.transport_mode {
+        ServerTransportMode::Plaintext => {
+            Server::builder()
+                .layer(
+                    TraceLayer::new_for_grpc()
+                        .make_span_with(|request: &HttpRequest<Body>| {
+                            let user_agent = request
+                                .headers()
+                                .get("user-agent")
+                                .and_then(|value| value.to_str().ok())
+                                .unwrap_or("-");
+                            tracing::info_span!(
+                                "grpc_request",
+                                method = %request.uri().path(),
+                                user_agent = %user_agent
+                            )
+                        })
+                        .on_request(())
+                        .on_response(
+                            |response: &HttpResponse<Body>, latency: Duration, _span: &Span| {
+                                let grpc_status = response
+                                    .headers()
+                                    .get("grpc-status")
+                                    .and_then(|value| value.to_str().ok())
+                                    .unwrap_or("0");
+                                tracing::debug!(
+                                    latency_ms = latency.as_millis() as u64,
+                                    grpc_status = grpc_status,
+                                    "grpc request completed"
+                                );
+                            },
+                        )
+                        .on_failure(|failure_classification, latency: Duration, _span: &Span| {
+                            tracing::warn!(
+                                latency_ms = latency.as_millis() as u64,
+                                failure = ?failure_classification,
+                                "grpc request failed"
+                            );
+                        }),
                 )
-                .on_failure(|failure_classification, latency: Duration, _span: &Span| {
-                    tracing::warn!(
-                        latency_ms = latency.as_millis() as u64,
-                        failure = ?failure_classification,
-                        "grpc request failed"
-                    );
-                }),
-        )
-        .add_service(standard_health_service)
-        .add_service(health_service)
-        .add_service(system_service)
-        .add_service(decks_service)
-        .add_service(notes_service)
-        .add_service(notetypes_service)
-        .serve_with_incoming_shutdown(TcpListenerStream::new(listener), shutdown_signal)
-        .await?;
+                .add_service(standard_health_service.clone())
+                .add_service(health_service.clone())
+                .add_service(system_service.clone())
+                .add_service(decks_service.clone())
+                .add_service(notes_service.clone())
+                .add_service(notetypes_service.clone())
+                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), shutdown_signal)
+                .await?;
+        }
+        ServerTransportMode::Tls(tls) => {
+            let identity = load_tls_identity(&tls.cert_path, &tls.key_path)?;
+            Server::builder()
+                .tls_config(ServerTlsConfig::new().identity(identity))?
+                .layer(
+                    TraceLayer::new_for_grpc()
+                        .make_span_with(|request: &HttpRequest<Body>| {
+                            let user_agent = request
+                                .headers()
+                                .get("user-agent")
+                                .and_then(|value| value.to_str().ok())
+                                .unwrap_or("-");
+                            tracing::info_span!(
+                                "grpc_request",
+                                method = %request.uri().path(),
+                                user_agent = %user_agent
+                            )
+                        })
+                        .on_request(())
+                        .on_response(
+                            |response: &HttpResponse<Body>, latency: Duration, _span: &Span| {
+                                let grpc_status = response
+                                    .headers()
+                                    .get("grpc-status")
+                                    .and_then(|value| value.to_str().ok())
+                                    .unwrap_or("0");
+                                tracing::debug!(
+                                    latency_ms = latency.as_millis() as u64,
+                                    grpc_status = grpc_status,
+                                    "grpc request completed"
+                                );
+                            },
+                        )
+                        .on_failure(|failure_classification, latency: Duration, _span: &Span| {
+                            tracing::warn!(
+                                latency_ms = latency.as_millis() as u64,
+                                failure = ?failure_classification,
+                                "grpc request failed"
+                            );
+                        }),
+                )
+                .add_service(standard_health_service.clone())
+                .add_service(health_service.clone())
+                .add_service(system_service.clone())
+                .add_service(decks_service.clone())
+                .add_service(notes_service.clone())
+                .add_service(notetypes_service.clone())
+                .serve_with_incoming_shutdown(TcpListenerStream::new(listener), shutdown_signal)
+                .await?;
+        }
+        ServerTransportMode::Spiffe(spiffe) => {
+            let incoming = transport::build_spiffe_incoming(listener, spiffe).await?;
+            Server::builder()
+                .layer(
+                    TraceLayer::new_for_grpc()
+                        .make_span_with(|request: &HttpRequest<Body>| {
+                            let user_agent = request
+                                .headers()
+                                .get("user-agent")
+                                .and_then(|value| value.to_str().ok())
+                                .unwrap_or("-");
+                            tracing::info_span!(
+                                "grpc_request",
+                                method = %request.uri().path(),
+                                user_agent = %user_agent
+                            )
+                        })
+                        .on_request(())
+                        .on_response(
+                            |response: &HttpResponse<Body>, latency: Duration, _span: &Span| {
+                                let grpc_status = response
+                                    .headers()
+                                    .get("grpc-status")
+                                    .and_then(|value| value.to_str().ok())
+                                    .unwrap_or("0");
+                                tracing::debug!(
+                                    latency_ms = latency.as_millis() as u64,
+                                    grpc_status = grpc_status,
+                                    "grpc request completed"
+                                );
+                            },
+                        )
+                        .on_failure(|failure_classification, latency: Duration, _span: &Span| {
+                            tracing::warn!(
+                                latency_ms = latency.as_millis() as u64,
+                                failure = ?failure_classification,
+                                "grpc request failed"
+                            );
+                        }),
+                )
+                .add_service(standard_health_service)
+                .add_service(health_service)
+                .add_service(system_service)
+                .add_service(decks_service)
+                .add_service(notes_service)
+                .add_service(notetypes_service)
+                .serve_with_incoming_shutdown(incoming, shutdown_signal)
+                .await?;
+        }
+    }
 
     Ok(())
+}
+
+fn load_tls_identity(
+    cert_path: &str,
+    key_path: &str,
+) -> Result<Identity, Box<dyn std::error::Error + Send + Sync>> {
+    let cert = std::fs::read(cert_path)?;
+    let key = std::fs::read(key_path)?;
+    Ok(Identity::from_pem(cert, key))
 }
 
 fn resolve_bind_addr(
@@ -237,8 +362,18 @@ fn configured_capabilities(config: &ServerConfig) -> Vec<String> {
         "notetypes.changes".to_owned(),
         "notetypes.count".to_owned(),
     ];
-    if !config.auth_disabled {
+    if matches!(
+        config.transport_mode,
+        crate::config::ServerTransportMode::Tls(_)
+    ) && !config.auth_disabled
+    {
         capabilities.push("auth.api_key".to_owned());
+    }
+    if matches!(
+        config.transport_mode,
+        crate::config::ServerTransportMode::Spiffe(_)
+    ) {
+        capabilities.push("auth.spiffe_mtls".to_owned());
     }
     capabilities
 }
@@ -253,11 +388,12 @@ mod tests {
         let capabilities = configured_capabilities(&ServerConfig {
             host: "127.0.0.1".to_owned(),
             port: 50051,
-            api_key: Some("test-key".to_owned()),
+            api_key: None,
             anki_version: None,
             auth_disabled: false,
             allow_non_local: false,
             allow_loopback_unauthenticated_health_check: false,
+            transport_mode: crate::config::ServerTransportMode::Plaintext,
         });
 
         assert!(capabilities.iter().any(|cap| cap == "notes.delete"));
@@ -268,13 +404,56 @@ mod tests {
         let capabilities = configured_capabilities(&ServerConfig {
             host: "127.0.0.1".to_owned(),
             port: 50051,
+            api_key: None,
+            anki_version: None,
+            auth_disabled: false,
+            allow_non_local: false,
+            allow_loopback_unauthenticated_health_check: false,
+            transport_mode: crate::config::ServerTransportMode::Plaintext,
+        });
+
+        assert!(capabilities.iter().any(|cap| cap == "notes.create.batch"));
+    }
+
+    #[test]
+    fn configured_capabilities_include_spiffe_auth_when_enabled() {
+        let capabilities = configured_capabilities(&ServerConfig {
+            host: "127.0.0.1".to_owned(),
+            port: 50051,
+            api_key: None,
+            anki_version: None,
+            auth_disabled: false,
+            allow_non_local: false,
+            allow_loopback_unauthenticated_health_check: false,
+            transport_mode: crate::config::ServerTransportMode::Spiffe(
+                crate::config::SpiffeTransportConfig {
+                    allowed_client_id: "spiffe://example.org/anki-edit".to_owned(),
+                    workload_api_socket: None,
+                },
+            ),
+        });
+
+        assert!(capabilities.iter().any(|cap| cap == "auth.spiffe_mtls"));
+    }
+
+    #[test]
+    fn configured_capabilities_include_api_key_only_for_tls() {
+        let capabilities = configured_capabilities(&ServerConfig {
+            host: "127.0.0.1".to_owned(),
+            port: 50051,
             api_key: Some("test-key".to_owned()),
             anki_version: None,
             auth_disabled: false,
             allow_non_local: false,
             allow_loopback_unauthenticated_health_check: false,
+            transport_mode: crate::config::ServerTransportMode::Tls(
+                crate::config::TlsTransportConfig {
+                    cert_path: "/tmp/server.pem".to_owned(),
+                    key_path: "/tmp/server.key".to_owned(),
+                },
+            ),
         });
 
-        assert!(capabilities.iter().any(|cap| cap == "notes.create.batch"));
+        assert!(capabilities.iter().any(|cap| cap == "auth.api_key"));
     }
 }

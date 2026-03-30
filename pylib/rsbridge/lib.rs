@@ -230,6 +230,11 @@ fn parse_runtime_overrides(dict: Option<&Bound<'_, PyDict>>) -> PyResult<Runtime
             dict,
             "allow_loopback_unauthenticated_health_check",
         )?,
+        transport_mode: extract_string(dict, "transport_mode")?,
+        tls_cert_path: extract_string(dict, "tls_cert_path")?,
+        tls_key_path: extract_string(dict, "tls_key_path")?,
+        spiffe_allowed_client_id: extract_string(dict, "spiffe_allowed_client_id")?,
+        spiffe_workload_api_socket: extract_string(dict, "spiffe_workload_api_socket")?,
     })
 }
 
