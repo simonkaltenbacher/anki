@@ -11,6 +11,15 @@ description = "Rust client for Anki API v1"
 [dependencies]
 anki-api-proto = { path = "../anki-api-proto" }
 futures.workspace = true
+http.workspace = true
+hyper-util.workspace = true
 prost14 = { package = "prost", version = "0.14" }
+rustls.workspace = true
+spiffe.workspace = true
+spiffe-rustls.workspace = true
+spiffe-rustls-tokio.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
 tonic.workspace = true
+tower.workspace = true

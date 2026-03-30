@@ -31,6 +31,8 @@ use tonic::Code;
 use tonic::Request;
 use tonic::Streaming;
 
+mod transport;
+
 /// Raw tonic client for `HealthService`.
 ///
 /// Prefer [`ApiClient`] for auth injection, capability bootstrap, and typed errors.
@@ -161,6 +163,20 @@ pub struct ConnectionConfig {
     pub endpoint: String,
     /// Optional API key used as `Authorization: Bearer <key>`.
     pub api_key: Option<String>,
+    /// Transport settings for the gRPC channel.
+    pub transport: TransportConfig,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TransportConfig {
+    Plaintext,
+    SpiffeMtls(SpiffeMtlsConfig),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpiffeMtlsConfig {
+    pub expected_server_id: String,
+    pub workload_api_socket: Option<String>,
 }
 
 impl ConnectionConfig {
@@ -169,12 +185,26 @@ impl ConnectionConfig {
         Self {
             endpoint: endpoint.into(),
             api_key: None,
+            transport: TransportConfig::Plaintext,
         }
     }
 
     /// Sets the API key used for bearer authentication.
     pub fn with_api_key(mut self, api_key: impl Into<String>) -> Self {
         self.api_key = Some(api_key.into());
+        self
+    }
+
+    /// Enables SPIFFE-backed mutual TLS with an exact expected server SPIFFE ID.
+    pub fn with_spiffe_mtls(
+        mut self,
+        expected_server_id: impl Into<String>,
+        workload_api_socket: Option<String>,
+    ) -> Self {
+        self.transport = TransportConfig::SpiffeMtls(SpiffeMtlsConfig {
+            expected_server_id: expected_server_id.into(),
+            workload_api_socket,
+        });
         self
     }
 }
@@ -191,6 +221,18 @@ pub enum ClientError {
     /// Transport setup/connectivity error.
     #[error("transport error: {0}")]
     Transport(#[from] tonic::transport::Error),
+    /// SPIFFE X.509 source/bootstrap error.
+    #[error("spiffe source error: {0}")]
+    SpiffeSource(#[from] spiffe::x509_source::X509SourceError),
+    /// SPIFFE identity bootstrap timed out.
+    #[error("timed out waiting for SPIFFE identity bootstrap")]
+    SpiffeBootstrapTimeout,
+    /// SPIFFE rustls configuration error.
+    #[error("spiffe tls configuration error: {0}")]
+    SpiffeTls(#[from] spiffe_rustls::Error),
+    /// SPIFFE tokio handshake error.
+    #[error("spiffe tls handshake error: {0}")]
+    SpiffeTokio(#[from] spiffe_rustls_tokio::Error),
     /// Optimistic concurrency mismatch reported by server.
     #[error("version conflict (retryable={retryable}): {message}")]
     VersionConflict { retryable: bool, message: String },
@@ -213,6 +255,7 @@ impl std::fmt::Debug for ConnectionConfig {
                     .map(|_| "<redacted>")
                     .unwrap_or("<none>"),
             )
+            .field("transport", &self.transport)
             .finish()
     }
 }
@@ -251,7 +294,7 @@ impl ApiClient {
     ///
     /// This method fails fast if the server is unreachable or auth is invalid.
     pub async fn connect(config: ConnectionConfig) -> Result<Self, ClientError> {
-        let channel = connect_channel(&config.endpoint).await?;
+        let channel = transport::connect_channel(&config).await?;
         let authorization = if let Some(api_key) = config.api_key {
             let value = format!("{BEARER_PREFIX}{api_key}");
             let metadata =
@@ -812,16 +855,6 @@ pub type NotesStream = ResponseStream<v1::ListNotesResponse>;
 /// Stream of `ListNoteRefsResponse` messages.
 pub type NoteRefsStream = ResponseStream<v1::ListNoteRefsResponse>;
 
-/// Connects a raw tonic channel to an Anki API endpoint.
-pub async fn connect_channel(
-    endpoint: impl AsRef<str>,
-) -> Result<tonic::transport::Channel, ClientError> {
-    let endpoint_str = endpoint.as_ref().to_owned();
-    let endpoint = tonic::transport::Endpoint::from_shared(endpoint_str.clone())
-        .map_err(|_| ClientError::InvalidEndpoint(endpoint_str))?;
-    endpoint.connect().await.map_err(Into::into)
-}
-
 fn parse_capabilities(values: &[String]) -> CapabilitySet {
     let known = values
         .iter()
@@ -892,6 +925,61 @@ mod tests {
         match error {
             ClientError::Rpc(status) => assert_eq!(status.code(), Code::NotFound),
             other => panic!("expected rpc error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn connection_config_defaults_to_plaintext_transport() {
+        let config = ConnectionConfig::new("http://127.0.0.1:50051");
+        assert_eq!(config.transport, TransportConfig::Plaintext);
+    }
+
+    #[test]
+    fn connection_config_can_enable_spiffe_transport() {
+        let config = ConnectionConfig::new("https://127.0.0.1:50051").with_spiffe_mtls(
+            "spiffe://example.org/server",
+            Some("unix:///tmp/spire-agent.sock".to_string()),
+        );
+
+        assert_eq!(
+            config.transport,
+            TransportConfig::SpiffeMtls(SpiffeMtlsConfig {
+                expected_server_id: "spiffe://example.org/server".to_string(),
+                workload_api_socket: Some("unix:///tmp/spire-agent.sock".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn connection_config_debug_redacts_api_key() {
+        let debug = format!(
+            "{:?}",
+            ConnectionConfig::new("http://127.0.0.1:50051").with_api_key("secret")
+        );
+
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("secret"));
+    }
+
+    #[tokio::test]
+    async fn spiffe_transport_dispatch_returns_bootstrap_error_without_workload_api() {
+        let config = ConnectionConfig::new("https://127.0.0.1:50051").with_spiffe_mtls(
+            "spiffe://example.org/server",
+            Some("unix:///tmp/anki-api-client-missing-spire.sock".to_string()),
+        );
+
+        let error = transport::connect_channel(&config)
+            .await
+            .expect_err("should fail");
+        match error {
+            ClientError::SpiffeSource(_) => {}
+            ClientError::SpiffeBootstrapTimeout => {}
+            ClientError::Transport(_) => {}
+            ClientError::SpiffeTls(_) => {}
+            ClientError::SpiffeTokio(_) => {}
+            other => {
+                panic!("expected spiffe bootstrap-related error, got {other:?}");
+            }
         }
     }
 }
