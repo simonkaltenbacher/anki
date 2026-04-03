@@ -1,12 +1,12 @@
 use tonic::transport::ClientTlsConfig;
-use tonic::transport::Endpoint;
 
+use super::EndpointTarget;
 use crate::Channel;
 use crate::ClientError;
 
-pub(crate) async fn connect_channel(endpoint: &str) -> Result<Channel, ClientError> {
-    let endpoint = Endpoint::from_shared(endpoint.to_owned())
-        .map_err(|_| ClientError::InvalidEndpoint(endpoint.to_owned()))?
+pub(crate) async fn connect_channel(target: &EndpointTarget) -> Result<Channel, ClientError> {
+    let endpoint = target
+        .to_tonic_endpoint()?
         .tls_config(ClientTlsConfig::new().with_enabled_roots())?;
     endpoint
         .connect()
