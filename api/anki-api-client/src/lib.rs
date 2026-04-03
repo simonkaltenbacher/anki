@@ -27,11 +27,13 @@ use futures::Stream;
 use http::{Request as HttpRequest, Response as HttpResponse};
 use prost14::Message;
 use thiserror::Error;
+use tonic::body::Body;
 use tonic::metadata::Ascii;
 use tonic::metadata::MetadataValue;
 use tonic::Code;
 use tonic::Request;
 use tonic::Streaming;
+use tower::Service;
 
 #[doc(hidden)]
 pub mod rustls_channel;
@@ -262,8 +264,8 @@ pub enum Channel {
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-impl tower::Service<HttpRequest<tonic::body::Body>> for Channel {
-    type Response = HttpResponse<tonic::body::Body>;
+impl Service<HttpRequest<Body>> for Channel {
+    type Response = HttpResponse<Body>;
     type Error = crate::rustls_channel::BoxError;
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
@@ -274,7 +276,7 @@ impl tower::Service<HttpRequest<tonic::body::Body>> for Channel {
         }
     }
 
-    fn call(&mut self, request: HttpRequest<tonic::body::Body>) -> Self::Future {
+    fn call(&mut self, request: HttpRequest<Body>) -> Self::Future {
         match self {
             Self::Tonic(channel) => {
                 let future = channel.call(request);
