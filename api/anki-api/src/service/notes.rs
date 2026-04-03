@@ -45,11 +45,11 @@ use tonic::Status;
 
 use crate::adapter;
 use crate::service::common;
-use crate::store::SharedStore;
+use crate::store::BackendStore;
 
 #[derive(Clone)]
 pub struct NotesApi {
-    store: SharedStore,
+    store: BackendStore,
 }
 
 type NotetypeCache = HashMap<i64, anki_proto::notetypes::Notetype>;
@@ -79,7 +79,7 @@ impl Stream for ListNoteRefsStream {
 }
 
 impl NotesApi {
-    pub fn new(store: SharedStore) -> Self {
+    pub fn new(store: BackendStore) -> Self {
         Self { store }
     }
 }
@@ -416,7 +416,7 @@ impl NotesApi {
 }
 
 fn map_list_note(
-    store: &SharedStore,
+    store: &BackendStore,
     note_id: i64,
     notetype_cache: &mut NotetypeCache,
 ) -> Result<ListNotesResponse, Status> {
@@ -429,7 +429,7 @@ fn map_list_note(
 }
 
 fn map_list_note_ref(
-    store: &SharedStore,
+    store: &BackendStore,
     note_id: i64,
     notetype_cache: &mut NotetypeCache,
 ) -> Result<ListNoteRefsResponse, Status> {
@@ -446,7 +446,7 @@ fn map_list_note_ref(
 }
 
 fn update_note_fields_inner(
-    store: &SharedStore,
+    store: &BackendStore,
     request: UpdateNoteFieldsRequest,
     notetype_cache: &mut NotetypeCache,
 ) -> Result<UpdateNoteFieldsResponse, Status> {
@@ -492,7 +492,7 @@ fn update_note_fields_inner(
 }
 
 fn create_note_inner(
-    store: &SharedStore,
+    store: &BackendStore,
     request: CreateNoteRequest,
     notetype_cache: &mut NotetypeCache,
     deck_cache: &mut DeckCache,
@@ -508,7 +508,7 @@ fn create_note_inner(
 }
 
 fn prepare_create_note_fields_and_deck(
-    store: &SharedStore,
+    store: &BackendStore,
     request: CreateNoteRequest,
     notetype_cache: &mut NotetypeCache,
     deck_cache: &mut DeckCache,
@@ -567,7 +567,7 @@ fn prepare_create_note_fields_and_deck(
 }
 
 fn resolve_create_note_deck_id(
-    store: &SharedStore,
+    store: &BackendStore,
     deck: Option<Deck>,
     deck_cache: &mut DeckCache,
 ) -> Result<i64, Status> {
@@ -598,7 +598,7 @@ fn resolve_create_note_deck_id(
 trait NotetypeLookup {
     fn get_or_load(
         &mut self,
-        store: &SharedStore,
+        store: &BackendStore,
         notetype_id: i64,
     ) -> Result<anki_proto::notetypes::Notetype, Status>;
 }
@@ -606,7 +606,7 @@ trait NotetypeLookup {
 impl NotetypeLookup for NotetypeCache {
     fn get_or_load(
         &mut self,
-        store: &SharedStore,
+        store: &BackendStore,
         notetype_id: i64,
     ) -> Result<anki_proto::notetypes::Notetype, Status> {
         match self.entry(notetype_id) {

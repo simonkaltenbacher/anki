@@ -4,9 +4,10 @@ use std::path::PathBuf;
 use anki_api::config::FileConfig;
 use anki_api::config::RuntimeOverrides;
 use anki_api::config::ServerConfig;
-use anki_api::grpc;
+use anki_api::grpc::GrpcServer;
 use anki_api::logging;
 use anki_api::store;
+use std::future::pending;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -37,7 +38,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
     let store = store::initialize_store(collection_path)?;
 
-    if let Err(err) = grpc::serve_with_store(config, store).await {
+    if let Err(err) = GrpcServer::new(config, store, pending::<()>())
+        .serve()
+        .await
+    {
         tracing::error!(error = %err, "anki api grpc server terminated with error");
         return Err(err);
     }

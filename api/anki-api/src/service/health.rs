@@ -6,15 +6,15 @@ use tonic::Request;
 use tonic::Response;
 use tonic::Status;
 
-use crate::store::SharedStore;
+use crate::store::BackendStore;
 
 #[derive(Clone)]
 pub struct HealthApi {
-    store: SharedStore,
+    store: BackendStore,
 }
 
 impl HealthApi {
-    pub fn new(store: SharedStore) -> Self {
+    pub fn new(store: BackendStore) -> Self {
         Self { store }
     }
 }

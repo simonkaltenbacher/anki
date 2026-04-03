@@ -7,8 +7,9 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use http::header::USER_AGENT;
+use http::uri::{Authority, Scheme};
 use http::{HeaderValue, Request, Response, Uri};
-use hyper::client::conn::http2::Builder;
+use hyper::client::conn::http2::{Builder, SendRequest as HyperSendRequest};
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use rustls::pki_types::ServerName;
@@ -23,50 +24,49 @@ const TONIC_USER_AGENT: &str = concat!("tonic/", env!("CARGO_PKG_VERSION"));
 
 pub(crate) type BoxError = Box<dyn StdError + Send + Sync + 'static>;
 
-pub(crate) async fn connect(
-    uri: Uri,
-    connect_timeout: Option<Duration>,
-    tls_config: tokio_rustls::rustls::ClientConfig,
-    server_name: ServerName<'static>,
-) -> Result<Channel, Error> {
-    let mut http = HttpConnector::new();
-    http.enforce_http(false);
-    http.set_nodelay(true);
-    http.set_connect_timeout(connect_timeout);
-
-    let io = http.call(uri.clone()).await.map_err(Error::from_source)?;
-    let io = io.into_inner();
-    let io = TlsConnector::new(tls_config, server_name)
-        .connect(io)
-        .await
-        .map_err(Error::from_source)?;
-
-    let mut builder = Builder::new(TokioExecutor::new());
-    builder.timer(TokioTimer::new());
-    let (send_request, connection) = builder
-        .handshake::<_, Body>(io)
-        .await
-        .map_err(Error::from_source)?;
-
-    tokio::spawn(async move {
-        if let Err(error) = connection.await {
-            tracing::debug!(error = ?error, "SPIFFE channel connection task failed");
-        }
-    });
-
-    let service = SendRequest {
-        inner: send_request,
-    };
-    let service = AddOrigin::new(service, uri);
-    let service = UserAgent::new(service);
-    let (svc, worker) = Buffer::pair(service, DEFAULT_BUFFER_SIZE);
-    tokio::spawn(worker);
-
-    Ok(Channel { svc })
-}
-
 pub struct Channel {
     svc: Buffer<Request<Body>, BoxFuture<'static, Result<Response<Body>, BoxError>>>,
+}
+
+impl Channel {
+    pub(crate) async fn connect(
+        uri: Uri,
+        connect_timeout: Option<Duration>,
+        tls_config: tokio_rustls::rustls::ClientConfig,
+        server_name: ServerName<'static>,
+    ) -> Result<Self, Error> {
+        let mut http = HttpConnector::new();
+        http.enforce_http(false);
+        http.set_nodelay(true);
+        http.set_connect_timeout(connect_timeout);
+
+        let io = http.call(uri.clone()).await.map_err(Error::from_source)?;
+        let io = io.into_inner();
+        let io = TlsConnector::new(tls_config, server_name)
+            .connect(io)
+            .await
+            .map_err(Error::from_source)?;
+
+        let mut builder = Builder::new(TokioExecutor::new());
+        builder.timer(TokioTimer::new());
+        let (send_request, connection) = builder
+            .handshake::<_, Body>(io)
+            .await
+            .map_err(Error::from_source)?;
+
+        tokio::spawn(async move {
+            if let Err(error) = connection.await {
+                tracing::debug!(error = ?error, "SPIFFE channel connection task failed");
+            }
+        });
+
+        let service = SendRequest::new(send_request, OriginParts::from_uri(uri));
+        let service = UserAgent::new(service);
+        let (svc, worker) = Buffer::pair(service, DEFAULT_BUFFER_SIZE);
+        tokio::spawn(worker);
+
+        Ok(Self { svc })
+    }
 }
 
 impl Clone for Channel {
@@ -79,7 +79,7 @@ impl Clone for Channel {
 
 impl fmt::Debug for Channel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SpiffeChannel").finish()
+        f.debug_struct("Channel").finish()
     }
 }
 
@@ -133,7 +133,7 @@ impl Error {
 
 impl fmt::Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut tuple = f.debug_tuple("rustls_channel::Error");
+        let mut tuple = f.debug_tuple("channel::Error");
         if let Some(source) = &self.source {
             tuple.field(source);
         }
@@ -156,7 +156,14 @@ impl StdError for Error {
 }
 
 struct SendRequest {
-    inner: hyper::client::conn::http2::SendRequest<Body>,
+    inner: HyperSendRequest<Body>,
+    origin: OriginParts,
+}
+
+impl SendRequest {
+    fn new(inner: HyperSendRequest<Body>, origin: OriginParts) -> Self {
+        Self { inner, origin }
+    }
 }
 
 impl Service<Request<Body>> for SendRequest {
@@ -169,7 +176,15 @@ impl Service<Request<Body>> for SendRequest {
     }
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
-        let future = self.inner.send_request(req);
+        let (mut head, body) = req.into_parts();
+        head.uri = {
+            let mut uri: http::uri::Parts = head.uri.into();
+            uri.scheme = Some(self.origin.scheme.clone());
+            uri.authority = Some(self.origin.authority.clone());
+            Uri::from_parts(uri).expect("valid uri")
+        };
+
+        let future = self.inner.send_request(Request::from_parts(head, body));
         Box::pin(async move {
             future
                 .await
@@ -179,61 +194,22 @@ impl Service<Request<Body>> for SendRequest {
     }
 }
 
-#[derive(Debug)]
-struct AddOrigin<T> {
-    inner: T,
-    scheme: Option<http::uri::Scheme>,
-    authority: Option<http::uri::Authority>,
+#[derive(Clone, Debug)]
+struct OriginParts {
+    scheme: Scheme,
+    authority: Authority,
 }
 
-impl<T> AddOrigin<T> {
-    fn new(inner: T, origin: Uri) -> Self {
+impl OriginParts {
+    fn from_uri(origin: Uri) -> Self {
         let http::uri::Parts {
             scheme, authority, ..
         } = origin.into_parts();
 
         Self {
-            inner,
-            scheme,
-            authority,
+            scheme: scheme.expect("validated endpoint must include a scheme"),
+            authority: authority.expect("validated endpoint must include an authority"),
         }
-    }
-}
-
-impl<T, ReqBody> Service<Request<ReqBody>> for AddOrigin<T>
-where
-    T: Service<Request<ReqBody>>,
-    T::Future: Send + 'static,
-    T::Error: Into<BoxError>,
-{
-    type Response = T::Response;
-    type Error = BoxError;
-    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
-
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        self.inner.poll_ready(cx).map_err(Into::into)
-    }
-
-    fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
-        if self.scheme.is_none() || self.authority.is_none() {
-            return Box::pin(async move {
-                Err::<Self::Response, _>(
-                    std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid uri").into(),
-                )
-            });
-        }
-
-        let (mut head, body) = req.into_parts();
-        head.uri = {
-            let mut uri: http::uri::Parts = head.uri.into();
-            uri.scheme = self.scheme.clone();
-            uri.authority = self.authority.clone();
-            Uri::from_parts(uri).expect("valid uri")
-        };
-
-        let request = Request::from_parts(head, body);
-        let future = self.inner.call(request);
-        Box::pin(async move { future.await.map_err(Into::into) })
     }
 }
 

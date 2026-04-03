@@ -112,14 +112,11 @@ impl Backend {
                 };
 
                 runtime.block_on(async move {
-                    if let Err(err) = grpc::serve_with_store_and_shutdown_and_ready(
-                        config,
-                        store,
-                        async move {
-                            let _ = shutdown_rx.await;
-                        },
-                        Some(ready_tx),
-                    )
+                    if let Err(err) = grpc::GrpcServer::new(config, store, async move {
+                        let _ = shutdown_rx.await;
+                    })
+                    .with_startup_status(ready_tx)
+                    .serve()
                     .await
                     {
                         eprintln!("anki api server terminated with error: {err}");

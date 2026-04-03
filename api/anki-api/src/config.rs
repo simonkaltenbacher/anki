@@ -168,44 +168,26 @@ impl ServerConfig {
             file.spiffe_workload_api_socket,
             String::new(),
         );
+        let api_key = non_empty(api_key);
+        let anki_version = non_empty(anki_version);
+        let tls_cert_path = non_empty(tls_cert_path);
+        let tls_key_path = non_empty(tls_key_path);
+        let spiffe_allowed_client_id = non_empty(spiffe_allowed_client_id);
+        let spiffe_workload_api_socket = non_empty(spiffe_workload_api_socket);
 
         let config = Self {
             host,
             port,
-            anki_version: if anki_version.is_empty() {
-                None
-            } else {
-                Some(anki_version)
-            },
+            anki_version,
             allow_non_local,
             connection_mode: resolve_connection_mode(
                 &transport_mode,
-                if api_key.is_empty() {
-                    None
-                } else {
-                    Some(api_key)
-                },
+                api_key,
                 auth_disabled,
-                if tls_cert_path.is_empty() {
-                    None
-                } else {
-                    Some(tls_cert_path)
-                },
-                if tls_key_path.is_empty() {
-                    None
-                } else {
-                    Some(tls_key_path)
-                },
-                if spiffe_allowed_client_id.is_empty() {
-                    None
-                } else {
-                    Some(spiffe_allowed_client_id)
-                },
-                if spiffe_workload_api_socket.is_empty() {
-                    None
-                } else {
-                    Some(spiffe_workload_api_socket)
-                },
+                tls_cert_path,
+                tls_key_path,
+                spiffe_allowed_client_id,
+                spiffe_workload_api_socket,
             )?,
         };
         config.validate()?;
@@ -318,6 +300,10 @@ fn env_transport_mode() -> Result<Option<String>, ConfigError> {
 
 fn pick_value<T>(runtime: Option<T>, env: Option<T>, file: Option<T>, default: T) -> T {
     runtime.or(env).or(file).unwrap_or(default)
+}
+
+fn non_empty(value: String) -> Option<String> {
+    if value.is_empty() { None } else { Some(value) }
 }
 
 fn resolve_connection_mode(

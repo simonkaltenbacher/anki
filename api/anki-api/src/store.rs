@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anki::backend::Backend;
 use anki::backend::init_backend;
@@ -82,8 +81,6 @@ pub enum StoreError {
 pub struct BackendStore {
     backend: Backend,
 }
-
-pub type SharedStore = Arc<BackendStore>;
 
 impl BackendStore {
     pub fn get_note(&self, note_id: i64) -> Result<Note, Status> {
@@ -368,24 +365,24 @@ impl BackendStore {
     }
 }
 
-pub fn shared_store_from_backend(backend: Backend) -> SharedStore {
-    Arc::new(BackendStore { backend })
+pub fn shared_store_from_backend(backend: Backend) -> BackendStore {
+    BackendStore { backend }
 }
 
-pub fn initialize_store(collection_path: PathBuf) -> Result<SharedStore, StoreError> {
+pub fn initialize_store(collection_path: PathBuf) -> Result<BackendStore, StoreError> {
     initialize_store_with_collection_path(collection_path)
 }
 
 #[cfg(test)]
 pub(crate) fn initialize_store_for_test(
     collection_path: PathBuf,
-) -> Result<SharedStore, StoreError> {
+) -> Result<BackendStore, StoreError> {
     initialize_store_with_collection_path(collection_path)
 }
 
 fn initialize_store_with_collection_path(
     collection_path: PathBuf,
-) -> Result<SharedStore, StoreError> {
+) -> Result<BackendStore, StoreError> {
     let backend = init_backend(
         &BackendInit {
             preferred_langs: vec![],
@@ -406,7 +403,7 @@ fn initialize_store_with_collection_path(
         },
     )?;
 
-    Ok(Arc::new(BackendStore { backend }))
+    Ok(BackendStore { backend })
 }
 
 fn media_paths_from_collection_path(

@@ -34,15 +34,15 @@ use tonic::Status;
 
 use crate::adapter;
 use crate::service::common;
-use crate::store::SharedStore;
+use crate::store::BackendStore;
 
 #[derive(Clone)]
 pub struct NotetypesApi {
-    store: SharedStore,
+    store: BackendStore,
 }
 
 impl NotetypesApi {
-    pub fn new(store: SharedStore) -> Self {
+    pub fn new(store: BackendStore) -> Self {
         Self { store }
     }
 }
@@ -217,7 +217,7 @@ impl NotetypesService for NotetypesApi {
 }
 
 fn update_templates_inner(
-    store: &SharedStore,
+    store: &BackendStore,
     request: UpdateTemplatesRequest,
 ) -> Result<UpdateTemplatesResponse, Status> {
     let updated = update_notetype_content(
@@ -233,7 +233,7 @@ fn update_templates_inner(
 }
 
 fn update_css_inner(
-    store: &SharedStore,
+    store: &BackendStore,
     request: UpdateCssRequest,
 ) -> Result<UpdateCssResponse, Status> {
     let updated = update_notetype_content(
@@ -250,7 +250,7 @@ fn update_css_inner(
 }
 
 fn update_notetype_content_inner(
-    store: &SharedStore,
+    store: &BackendStore,
     request: UpdateNotetypeContentRequest,
 ) -> Result<UpdateNotetypeContentResponse, Status> {
     let updated = update_notetype_content(
@@ -266,7 +266,7 @@ fn update_notetype_content_inner(
 }
 
 fn update_notetype_content(
-    store: &SharedStore,
+    store: &BackendStore,
     notetype_id: i64,
     templates: Vec<anki_api_proto::anki::api::v1::NotetypeTemplate>,
     css: Option<String>,

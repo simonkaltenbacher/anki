@@ -35,8 +35,7 @@ use tonic::Request;
 use tonic::Streaming;
 use tower::Service;
 
-#[doc(hidden)]
-pub mod rustls_channel;
+mod channel;
 mod transport;
 
 /// Raw tonic client for `HealthService`.
@@ -246,7 +245,7 @@ pub enum ClientError {
     SpiffeTls(#[from] spiffe_rustls::Error),
     /// SPIFFE client channel transport error.
     #[error("spiffe channel transport error: {0}")]
-    SpiffeChannel(#[from] rustls_channel::Error),
+    SpiffeChannel(#[from] channel::Error),
     /// Optimistic concurrency mismatch reported by server.
     #[error("version conflict (retryable={retryable}): {message}")]
     VersionConflict { retryable: bool, message: String },
@@ -259,14 +258,14 @@ pub enum ClientError {
 #[derive(Clone, Debug)]
 pub enum Channel {
     Tonic(tonic::transport::Channel),
-    Spiffe(rustls_channel::Channel),
+    Spiffe(channel::Channel),
 }
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 impl Service<HttpRequest<Body>> for Channel {
     type Response = HttpResponse<Body>;
-    type Error = crate::rustls_channel::BoxError;
+    type Error = crate::channel::BoxError;
     type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -343,7 +342,7 @@ impl ApiClient {
     ///
     /// This method fails fast if the server is unreachable or auth is invalid.
     pub async fn connect(config: ConnectionConfig) -> Result<Self, ClientError> {
-        let channel = transport::connect_channel(&config).await?;
+        let channel = transport::connect(&config).await?;
         let authorization = if let Some(api_key) = config.api_key {
             let value = format!("{BEARER_PREFIX}{api_key}");
             let metadata =
@@ -1023,9 +1022,7 @@ mod tests {
             Some("unix:///tmp/anki-api-client-missing-spire.sock".to_string()),
         );
 
-        let error = transport::connect_channel(&config)
-            .await
-            .expect_err("should fail");
+        let error = transport::connect(&config).await.expect_err("should fail");
         match error {
             ClientError::SpiffeSource(_) => {}
             ClientError::SpiffeBootstrapTimeout => {}
@@ -1041,9 +1038,7 @@ mod tests {
     #[tokio::test]
     async fn tls_transport_dispatch_rejects_invalid_endpoint() {
         let config = ConnectionConfig::new("https:// bad endpoint").with_tls();
-        let error = transport::connect_channel(&config)
-            .await
-            .expect_err("should fail");
+        let error = transport::connect(&config).await.expect_err("should fail");
         match error {
             ClientError::InvalidEndpoint(_) => {}
             other => panic!("expected invalid endpoint error, got {other:?}"),
