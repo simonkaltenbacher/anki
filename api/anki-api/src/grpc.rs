@@ -32,7 +32,8 @@ use tracing::Span;
 
 use crate::auth::ApiKeyAuthenticator;
 use crate::config::ServerConfig;
-use crate::config::ServerTransportMode;
+use crate::config::ServerConnectionMode;
+use crate::config::TlsAuthMode;
 use crate::service::decks::DecksApi;
 use crate::service::health::HealthApi;
 use crate::service::notes::NotesApi;
@@ -142,18 +143,29 @@ where
 
     tracing::info!(
         address = %bind_addr,
-        auth = if config.auth_disabled { "disabled" } else { "enabled" },
-        transport = match &config.transport_mode {
-            crate::config::ServerTransportMode::Plaintext => "plaintext",
-            crate::config::ServerTransportMode::Tls(_) => "tls",
-            crate::config::ServerTransportMode::Spiffe(_) => "spiffe",
+        auth = match &config.connection_mode {
+            ServerConnectionMode::Plaintext => "disabled",
+            ServerConnectionMode::Tls { auth: TlsAuthMode::Disabled, .. } => "disabled",
+            ServerConnectionMode::Tls { auth: TlsAuthMode::ApiKey(_), .. } => "enabled",
+            ServerConnectionMode::Spiffe(_) => "spiffe",
+        },
+        transport = match &config.connection_mode {
+            ServerConnectionMode::Plaintext => "plaintext",
+            ServerConnectionMode::Tls { .. } => "tls",
+            ServerConnectionMode::Spiffe(_) => "spiffe",
         },
         "starting anki api grpc server"
     );
-    if config.allow_non_local && matches!(config.transport_mode, ServerTransportMode::Plaintext) {
+    if config.allow_non_local && matches!(config.connection_mode, ServerConnectionMode::Plaintext) {
         tracing::warn!("non-local binding enabled; terminate TLS at a reverse proxy");
     }
-    if config.auth_disabled && matches!(config.transport_mode, ServerTransportMode::Tls(_)) {
+    if matches!(
+        config.connection_mode,
+        ServerConnectionMode::Tls {
+            auth: TlsAuthMode::Disabled,
+            ..
+        }
+    ) {
         tracing::warn!(
             "tls transport is enabled with auth disabled; requests will not require an api key"
         );
@@ -173,8 +185,8 @@ where
     if let Some(tx) = ready_tx.take() {
         let _ = tx.send(Ok(()));
     }
-    match &config.transport_mode {
-        ServerTransportMode::Plaintext => {
+    match &config.connection_mode {
+        ServerConnectionMode::Plaintext => {
             Server::builder()
                 .layer(make_grpc_trace_layer())
                 .add_service(standard_health_service.clone())
@@ -186,7 +198,7 @@ where
                 .serve_with_incoming_shutdown(TcpListenerStream::new(listener), shutdown_signal)
                 .await?;
         }
-        ServerTransportMode::Tls(tls) => {
+        ServerConnectionMode::Tls { tls, .. } => {
             let identity = load_tls_identity(&tls.cert_path, &tls.key_path)?;
             Server::builder()
                 .tls_config(ServerTlsConfig::new().identity(identity))?
@@ -200,7 +212,7 @@ where
                 .serve_with_incoming_shutdown(TcpListenerStream::new(listener), shutdown_signal)
                 .await?;
         }
-        ServerTransportMode::Spiffe(spiffe) => {
+        ServerConnectionMode::Spiffe(spiffe) => {
             let incoming = transport::build_spiffe_incoming(listener, spiffe).await?;
             Server::builder()
                 .layer(make_grpc_trace_layer())
@@ -334,15 +346,17 @@ fn configured_capabilities(config: &ServerConfig) -> Vec<String> {
         "notetypes.count".to_owned(),
     ];
     if matches!(
-        config.transport_mode,
-        crate::config::ServerTransportMode::Tls(_)
-    ) && !config.auth_disabled
-    {
+        config.connection_mode,
+        crate::config::ServerConnectionMode::Tls {
+            auth: crate::config::TlsAuthMode::ApiKey(_),
+            ..
+        }
+    ) {
         capabilities.push("auth.api_key".to_owned());
     }
     if matches!(
-        config.transport_mode,
-        crate::config::ServerTransportMode::Spiffe(_)
+        config.connection_mode,
+        crate::config::ServerConnectionMode::Spiffe(_)
     ) {
         capabilities.push("auth.spiffe_mtls".to_owned());
     }
@@ -353,17 +367,19 @@ fn configured_capabilities(config: &ServerConfig) -> Vec<String> {
 mod tests {
     use super::configured_capabilities;
     use crate::config::ServerConfig;
+    use crate::config::ServerConnectionMode;
+    use crate::config::SpiffeTransportConfig;
+    use crate::config::TlsAuthMode;
+    use crate::config::TlsTransportConfig;
 
     #[test]
     fn configured_capabilities_include_notes_delete() {
         let capabilities = configured_capabilities(&ServerConfig {
             host: "127.0.0.1".to_owned(),
             port: 50051,
-            api_key: None,
             anki_version: None,
-            auth_disabled: false,
             allow_non_local: false,
-            transport_mode: crate::config::ServerTransportMode::Plaintext,
+            connection_mode: ServerConnectionMode::Plaintext,
         });
 
         assert!(capabilities.iter().any(|cap| cap == "notes.delete"));
@@ -374,11 +390,9 @@ mod tests {
         let capabilities = configured_capabilities(&ServerConfig {
             host: "127.0.0.1".to_owned(),
             port: 50051,
-            api_key: None,
             anki_version: None,
-            auth_disabled: false,
             allow_non_local: false,
-            transport_mode: crate::config::ServerTransportMode::Plaintext,
+            connection_mode: ServerConnectionMode::Plaintext,
         });
 
         assert!(capabilities.iter().any(|cap| cap == "notes.create.batch"));
@@ -389,16 +403,12 @@ mod tests {
         let capabilities = configured_capabilities(&ServerConfig {
             host: "127.0.0.1".to_owned(),
             port: 50051,
-            api_key: None,
             anki_version: None,
-            auth_disabled: false,
             allow_non_local: false,
-            transport_mode: crate::config::ServerTransportMode::Spiffe(
-                crate::config::SpiffeTransportConfig {
-                    allowed_client_id: "spiffe://example.org/anki-edit".to_owned(),
-                    workload_api_socket: None,
-                },
-            ),
+            connection_mode: ServerConnectionMode::Spiffe(SpiffeTransportConfig {
+                allowed_client_id: "spiffe://example.org/anki-edit".to_owned(),
+                workload_api_socket: None,
+            }),
         });
 
         assert!(capabilities.iter().any(|cap| cap == "auth.spiffe_mtls"));
@@ -409,16 +419,15 @@ mod tests {
         let capabilities = configured_capabilities(&ServerConfig {
             host: "127.0.0.1".to_owned(),
             port: 50051,
-            api_key: Some("test-key".to_owned()),
             anki_version: None,
-            auth_disabled: false,
             allow_non_local: false,
-            transport_mode: crate::config::ServerTransportMode::Tls(
-                crate::config::TlsTransportConfig {
+            connection_mode: ServerConnectionMode::Tls {
+                tls: TlsTransportConfig {
                     cert_path: "/tmp/server.pem".to_owned(),
                     key_path: "/tmp/server.key".to_owned(),
                 },
-            ),
+                auth: TlsAuthMode::ApiKey("test-key".to_owned()),
+            },
         });
 
         assert!(capabilities.iter().any(|cap| cap == "auth.api_key"));

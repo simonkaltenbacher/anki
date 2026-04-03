@@ -4,7 +4,8 @@ use tonic::Status;
 use tonic::metadata::MetadataMap;
 
 use crate::config::ServerConfig;
-use crate::config::ServerTransportMode;
+use crate::config::ServerConnectionMode;
+use crate::config::TlsAuthMode;
 
 #[derive(Debug, Error)]
 pub enum AuthError {
@@ -19,16 +20,18 @@ pub enum AuthError {
 #[derive(Clone, Debug)]
 pub struct ApiKeyAuthenticator {
     api_key: Option<String>,
-    requires_api_key: bool,
-    auth_disabled: bool,
 }
 
 impl ApiKeyAuthenticator {
     pub fn new(config: &ServerConfig) -> Self {
         Self {
-            api_key: config.api_key.clone(),
-            requires_api_key: matches!(config.transport_mode, ServerTransportMode::Tls(_)),
-            auth_disabled: config.auth_disabled,
+            api_key: match &config.connection_mode {
+                ServerConnectionMode::Tls {
+                    auth: TlsAuthMode::ApiKey(api_key),
+                    ..
+                } => Some(api_key.clone()),
+                _ => None,
+            },
         }
     }
 
@@ -37,10 +40,7 @@ impl ApiKeyAuthenticator {
         request: &Request<()>,
         _is_health_check: bool,
     ) -> Result<(), Status> {
-        if self.auth_disabled {
-            return Ok(());
-        }
-        if !self.requires_api_key {
+        if self.api_key.is_none() {
             return Ok(());
         }
 
@@ -73,7 +73,8 @@ impl ApiKeyAuthenticator {
 mod tests {
     use super::ApiKeyAuthenticator;
     use crate::config::ServerConfig;
-    use crate::config::ServerTransportMode;
+    use crate::config::ServerConnectionMode;
+    use crate::config::TlsAuthMode;
     use crate::config::TlsTransportConfig;
     use tonic::Request;
 
@@ -81,11 +82,9 @@ mod tests {
         ServerConfig {
             host: "127.0.0.1".to_owned(),
             port: 50051,
-            api_key: None,
             anki_version: None,
-            auth_disabled: false,
             allow_non_local: false,
-            transport_mode: ServerTransportMode::Plaintext,
+            connection_mode: ServerConnectionMode::Plaintext,
         }
     }
 
@@ -93,14 +92,15 @@ mod tests {
         ServerConfig {
             host: "127.0.0.1".to_owned(),
             port: 50051,
-            api_key: Some("test-key".to_owned()),
             anki_version: None,
-            auth_disabled: false,
             allow_non_local: false,
-            transport_mode: ServerTransportMode::Tls(TlsTransportConfig {
-                cert_path: "/tmp/server.pem".to_owned(),
-                key_path: "/tmp/server.key".to_owned(),
-            }),
+            connection_mode: ServerConnectionMode::Tls {
+                tls: TlsTransportConfig {
+                    cert_path: "/tmp/server.pem".to_owned(),
+                    key_path: "/tmp/server.key".to_owned(),
+                },
+                auth: TlsAuthMode::ApiKey("test-key".to_owned()),
+            },
         }
     }
 
@@ -124,8 +124,16 @@ mod tests {
 
     #[test]
     fn auth_disabled_bypasses_tls_api_key_check() {
-        let mut config = tls_config();
-        config.auth_disabled = true;
+        let config = ServerConfig {
+            connection_mode: ServerConnectionMode::Tls {
+                tls: TlsTransportConfig {
+                    cert_path: "/tmp/server.pem".to_owned(),
+                    key_path: "/tmp/server.key".to_owned(),
+                },
+                auth: TlsAuthMode::Disabled,
+            },
+            ..plaintext_config()
+        };
         let auth = ApiKeyAuthenticator::new(&config);
         let request = Request::new(());
         auth.authenticate(&request, false)

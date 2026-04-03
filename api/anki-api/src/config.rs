@@ -9,10 +9,19 @@ const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 50051;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ServerTransportMode {
+pub enum ServerConnectionMode {
     Plaintext,
-    Tls(TlsTransportConfig),
+    Tls {
+        tls: TlsTransportConfig,
+        auth: TlsAuthMode,
+    },
     Spiffe(SpiffeTransportConfig),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TlsAuthMode {
+    Disabled,
+    ApiKey(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,11 +71,9 @@ pub struct FileConfig {
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
-    pub api_key: Option<String>,
     pub anki_version: Option<String>,
-    pub auth_disabled: bool,
     pub allow_non_local: bool,
-    pub transport_mode: ServerTransportMode,
+    pub connection_mode: ServerConnectionMode,
 }
 
 #[derive(Debug, Error)]
@@ -165,20 +172,20 @@ impl ServerConfig {
         let config = Self {
             host,
             port,
-            api_key: if api_key.is_empty() {
-                None
-            } else {
-                Some(api_key)
-            },
             anki_version: if anki_version.is_empty() {
                 None
             } else {
                 Some(anki_version)
             },
-            auth_disabled,
             allow_non_local,
-            transport_mode: resolve_transport_mode(
+            connection_mode: resolve_connection_mode(
                 &transport_mode,
+                if api_key.is_empty() {
+                    None
+                } else {
+                    Some(api_key)
+                },
+                auth_disabled,
                 if tls_cert_path.is_empty() {
                     None
                 } else {
@@ -213,24 +220,8 @@ impl ServerConfig {
         if !self.allow_non_local && !is_local_host(&self.host) {
             return Err(ConfigError::NonLocalBindNotAllowed);
         }
-        match &self.transport_mode {
-            ServerTransportMode::Plaintext => {
-                if self.api_key.is_some() {
-                    return Err(ConfigError::ApiKeyRequiresTls);
-                }
-            }
-            ServerTransportMode::Tls(_) => {
-                if !self.auth_disabled && self.api_key.is_none() {
-                    return Err(ConfigError::MissingApiKey);
-                }
-            }
-            ServerTransportMode::Spiffe(_) => {
-                if self.api_key.is_some() {
-                    return Err(ConfigError::ApiKeyRequiresTls);
-                }
-            }
-        }
-        if matches!(self.transport_mode, ServerTransportMode::Spiffe(_)) && !self.allow_non_local {
+        if matches!(self.connection_mode, ServerConnectionMode::Spiffe(_)) && !self.allow_non_local
+        {
             tracing::debug!(
                 "SPIFFE transport enabled without allow_non_local; server remains loopback-only"
             );
@@ -329,24 +320,43 @@ fn pick_value<T>(runtime: Option<T>, env: Option<T>, file: Option<T>, default: T
     runtime.or(env).or(file).unwrap_or(default)
 }
 
-fn resolve_transport_mode(
+fn resolve_connection_mode(
     mode: &str,
+    api_key: Option<String>,
+    auth_disabled: bool,
     tls_cert_path: Option<String>,
     tls_key_path: Option<String>,
     spiffe_allowed_client_id: Option<String>,
     spiffe_workload_api_socket: Option<String>,
-) -> Result<ServerTransportMode, ConfigError> {
+) -> Result<ServerConnectionMode, ConfigError> {
     match mode {
-        "plaintext" => Ok(ServerTransportMode::Plaintext),
-        "tls" => Ok(ServerTransportMode::Tls(TlsTransportConfig {
-            cert_path: tls_cert_path.ok_or(ConfigError::MissingTlsCertPath)?,
-            key_path: tls_key_path.ok_or(ConfigError::MissingTlsKeyPath)?,
-        })),
-        "spiffe" => Ok(ServerTransportMode::Spiffe(SpiffeTransportConfig {
-            allowed_client_id: spiffe_allowed_client_id
-                .ok_or(ConfigError::MissingSpiffeAllowedClientId)?,
-            workload_api_socket: spiffe_workload_api_socket,
-        })),
+        "plaintext" => {
+            if api_key.is_some() {
+                return Err(ConfigError::ApiKeyRequiresTls);
+            }
+            Ok(ServerConnectionMode::Plaintext)
+        }
+        "tls" => Ok(ServerConnectionMode::Tls {
+            tls: TlsTransportConfig {
+                cert_path: tls_cert_path.ok_or(ConfigError::MissingTlsCertPath)?,
+                key_path: tls_key_path.ok_or(ConfigError::MissingTlsKeyPath)?,
+            },
+            auth: if auth_disabled {
+                TlsAuthMode::Disabled
+            } else {
+                TlsAuthMode::ApiKey(api_key.ok_or(ConfigError::MissingApiKey)?)
+            },
+        }),
+        "spiffe" => {
+            if api_key.is_some() {
+                return Err(ConfigError::ApiKeyRequiresTls);
+            }
+            Ok(ServerConnectionMode::Spiffe(SpiffeTransportConfig {
+                allowed_client_id: spiffe_allowed_client_id
+                    .ok_or(ConfigError::MissingSpiffeAllowedClientId)?,
+                workload_api_socket: spiffe_workload_api_socket,
+            }))
+        }
         other => Err(ConfigError::InvalidTransportMode(other.to_owned())),
     }
 }
@@ -423,8 +433,9 @@ mod tests {
     use super::FileConfig;
     use super::RuntimeOverrides;
     use super::ServerConfig;
-    use super::ServerTransportMode;
+    use super::ServerConnectionMode;
     use super::SpiffeTransportConfig;
+    use super::TlsAuthMode;
     use super::TlsTransportConfig;
 
     #[test]
@@ -432,7 +443,7 @@ mod tests {
         let config =
             ServerConfig::resolve(RuntimeOverrides::default(), FileConfig::default()).unwrap();
 
-        assert_eq!(config.transport_mode, ServerTransportMode::Plaintext);
+        assert_eq!(config.connection_mode, ServerConnectionMode::Plaintext);
     }
 
     #[test]
@@ -464,11 +475,14 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            config.transport_mode,
-            ServerTransportMode::Tls(TlsTransportConfig {
-                cert_path: "/tmp/server.pem".to_owned(),
-                key_path: "/tmp/server.key".to_owned(),
-            })
+            config.connection_mode,
+            ServerConnectionMode::Tls {
+                tls: TlsTransportConfig {
+                    cert_path: "/tmp/server.pem".to_owned(),
+                    key_path: "/tmp/server.key".to_owned(),
+                },
+                auth: TlsAuthMode::ApiKey("test-key".to_owned()),
+            }
         );
     }
 
@@ -485,8 +499,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            config.transport_mode,
-            ServerTransportMode::Spiffe(SpiffeTransportConfig {
+            config.connection_mode,
+            ServerConnectionMode::Spiffe(SpiffeTransportConfig {
                 allowed_client_id: "spiffe://example.org/anki-edit".to_owned(),
                 workload_api_socket: None,
             })
