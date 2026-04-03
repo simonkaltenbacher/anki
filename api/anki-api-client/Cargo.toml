@@ -16,6 +16,7 @@ hyper = { workspace = true, features = ["client", "http2"] }
 hyper-util = { workspace = true, features = ["client", "client-legacy", "tokio"] }
 prost14 = { package = "prost", version = "0.14" }
 rustls.workspace = true
+rustls-native-certs = "0.8.3"
 spiffe.workspace = true
 spiffe-rustls.workspace = true
 spiffe-rustls-tokio.workspace = true

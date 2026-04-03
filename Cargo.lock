@@ -189,6 +189,7 @@ dependencies = [
  "hyper-util",
  "prost 0.14.3",
  "rustls",
+ "rustls-native-certs",
  "spiffe",
  "spiffe-rustls",
  "spiffe-rustls-tokio",

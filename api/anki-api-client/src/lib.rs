@@ -17,23 +17,19 @@ pub use anki_api_proto::anki::api::v1;
 pub use anki_api_proto::anki::api::v1::create_note_request;
 
 use std::collections::HashSet;
-use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::task::Context;
 use std::task::Poll;
 
 use futures::Stream;
-use http::{Request as HttpRequest, Response as HttpResponse};
 use prost14::Message;
 use thiserror::Error;
-use tonic::body::Body;
 use tonic::metadata::Ascii;
 use tonic::metadata::MetadataValue;
 use tonic::Code;
 use tonic::Request;
 use tonic::Streaming;
-use tower::Service;
 
 mod channel;
 mod transport;
@@ -231,9 +227,6 @@ pub enum ClientError {
     /// API key could not be encoded as gRPC metadata.
     #[error("invalid api key metadata value")]
     InvalidApiKeyMetadata,
-    /// Transport setup/connectivity error.
-    #[error("transport error: {0}")]
-    Transport(#[from] tonic::transport::Error),
     /// SPIFFE X.509 source/bootstrap error.
     #[error("spiffe source error: {0}")]
     SpiffeSource(#[from] spiffe::x509_source::X509SourceError),
@@ -243,9 +236,12 @@ pub enum ClientError {
     /// SPIFFE rustls configuration error.
     #[error("spiffe tls configuration error: {0}")]
     SpiffeTls(#[from] spiffe_rustls::Error),
-    /// SPIFFE client channel transport error.
-    #[error("spiffe channel transport error: {0}")]
-    SpiffeChannel(#[from] channel::Error),
+    /// TLS configuration error.
+    #[error("tls configuration error: {0}")]
+    TlsConfig(String),
+    /// Client channel transport error.
+    #[error("channel transport error: {0}")]
+    Channel(#[from] channel::Error),
     /// Optimistic concurrency mismatch reported by server.
     #[error("version conflict (retryable={retryable}): {message}")]
     VersionConflict { retryable: bool, message: String },
@@ -255,39 +251,7 @@ pub enum ClientError {
 }
 
 /// Client channel used by generated tonic stubs.
-#[derive(Clone, Debug)]
-pub enum Channel {
-    Tonic(tonic::transport::Channel),
-    Spiffe(channel::Channel),
-}
-
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
-impl Service<HttpRequest<Body>> for Channel {
-    type Response = HttpResponse<Body>;
-    type Error = crate::channel::BoxError;
-    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
-
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        match self {
-            Self::Tonic(channel) => channel.poll_ready(cx).map_err(Into::into),
-            Self::Spiffe(channel) => channel.poll_ready(cx),
-        }
-    }
-
-    fn call(&mut self, request: HttpRequest<Body>) -> Self::Future {
-        match self {
-            Self::Tonic(channel) => {
-                let future = channel.call(request);
-                Box::pin(async move { future.await.map_err(Into::into) })
-            }
-            Self::Spiffe(channel) => {
-                let future = channel.call(request);
-                Box::pin(future)
-            }
-        }
-    }
-}
+pub type Channel = channel::Channel;
 
 // Manual Debug impls intentionally redact secrets so API keys/tokens are never
 // exposed if client configuration/state is logged.
@@ -1026,9 +990,8 @@ mod tests {
         match error {
             ClientError::SpiffeSource(_) => {}
             ClientError::SpiffeBootstrapTimeout => {}
-            ClientError::Transport(_) => {}
             ClientError::SpiffeTls(_) => {}
-            ClientError::SpiffeChannel(_) => {}
+            ClientError::Channel(_) => {}
             other => {
                 panic!("expected spiffe bootstrap-related error, got {other:?}");
             }

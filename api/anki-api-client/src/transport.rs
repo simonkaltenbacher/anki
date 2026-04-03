@@ -4,12 +4,11 @@ use std::time::Duration;
 
 use http::Uri;
 use rustls::pki_types::ServerName;
+use rustls::RootCertStore;
 use spiffe::X509Source;
 use spiffe_rustls::authorizer;
 use spiffe_rustls::mtls_client;
 use tokio::time::timeout;
-use tonic::transport::ClientTlsConfig;
-use tonic::transport::Endpoint;
 
 use crate::channel;
 use crate::Channel;
@@ -25,16 +24,16 @@ pub(crate) async fn connect(config: &ConnectionConfig) -> Result<Channel, Client
     let target = EndpointTarget::try_from(config.endpoint.as_str())?;
 
     match &config.transport {
-        TransportConfig::Plaintext => connect_tonic_channel(&target, false).await,
-        TransportConfig::Tls => connect_tonic_channel(&target, true).await,
+        TransportConfig::Plaintext => connect_plaintext(&target).await,
+        TransportConfig::Tls => connect_tls(&target).await,
         TransportConfig::SpiffeMtls(spiffe_config) => connect_spiffe(&target, spiffe_config).await,
     }
 }
 
-pub(super) struct EndpointTarget {
-    pub(super) raw: String,
-    pub(super) uri: Uri,
-    pub(super) server_name: ServerName<'static>,
+struct EndpointTarget {
+    raw: String,
+    uri: Uri,
+    server_name: ServerName<'static>,
 }
 
 impl TryFrom<&str> for EndpointTarget {
@@ -57,27 +56,28 @@ impl TryFrom<&str> for EndpointTarget {
     }
 }
 
-impl EndpointTarget {
-    pub(super) fn to_tonic_endpoint(&self) -> Result<Endpoint, ClientError> {
-        Endpoint::from_shared(self.raw.clone())
-            .map_err(|_| ClientError::InvalidEndpoint(self.raw.clone()))
-    }
+async fn connect_plaintext(target: &EndpointTarget) -> Result<Channel, ClientError> {
+    channel::Channel::connect(
+        target.uri.clone(),
+        None,
+        channel::TransportSecurity::Plaintext,
+    )
+    .await
+    .map_err(Into::into)
 }
 
-async fn connect_tonic_channel(
-    target: &EndpointTarget,
-    use_tls: bool,
-) -> Result<Channel, ClientError> {
-    let mut endpoint = target.to_tonic_endpoint()?;
-    if use_tls {
-        endpoint = endpoint.tls_config(ClientTlsConfig::new().with_enabled_roots())?;
-    }
-
-    endpoint
-        .connect()
-        .await
-        .map(Channel::Tonic)
-        .map_err(Into::into)
+async fn connect_tls(target: &EndpointTarget) -> Result<Channel, ClientError> {
+    let tls_config = build_tls_config()?;
+    channel::Channel::connect(
+        target.uri.clone(),
+        None,
+        channel::TransportSecurity::Tls {
+            tls_config,
+            server_name: target.server_name.clone(),
+        },
+    )
+    .await
+    .map_err(Into::into)
 }
 
 async fn connect_spiffe(
@@ -116,15 +116,17 @@ async fn connect_spiffe(
     let channel = channel::Channel::connect(
         target.uri.clone(),
         Some(SPIFFE_CONNECT_TIMEOUT),
-        tls_config,
-        target.server_name.clone(),
+        channel::TransportSecurity::Tls {
+            tls_config,
+            server_name: target.server_name.clone(),
+        },
     )
     .await
     .inspect_err(|error| {
         tracing::debug!(error = %error, "SPIFFE mTLS channel connection failed");
     })?;
     tracing::debug!("SPIFFE mTLS channel connected");
-    Ok(Channel::Spiffe(channel))
+    Ok(channel)
 }
 
 async fn build_x509_source(config: &SpiffeMtlsConfig) -> Result<X509Source, ClientError> {
@@ -142,4 +144,24 @@ fn server_name_from_host(
     }
 
     ServerName::try_from(host.to_owned())
+}
+
+fn build_tls_config() -> Result<tokio_rustls::rustls::ClientConfig, ClientError> {
+    let native_certs = rustls_native_certs::load_native_certs();
+    let mut roots = RootCertStore::empty();
+    for cert in native_certs.certs {
+        roots.add(cert).map_err(|error| {
+            ClientError::TlsConfig(format!("failed to add native root certificate: {error}"))
+        })?;
+    }
+
+    if roots.is_empty() {
+        return Err(ClientError::TlsConfig(
+            "no native root certificates available".to_owned(),
+        ));
+    }
+
+    Ok(tokio_rustls::rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth())
 }

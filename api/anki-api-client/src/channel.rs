@@ -20,10 +20,19 @@ use tower::buffer::{future::ResponseFuture as BufferResponseFuture, Buffer};
 use tower::Service;
 
 const DEFAULT_BUFFER_SIZE: usize = 1024;
-const TONIC_USER_AGENT: &str = concat!("tonic/", env!("CARGO_PKG_VERSION"));
+const CLIENT_USER_AGENT: &str = concat!("anki-api-client/", env!("CARGO_PKG_VERSION"));
 
 pub(crate) type BoxError = Box<dyn StdError + Send + Sync + 'static>;
 
+pub(crate) enum TransportSecurity {
+    Plaintext,
+    Tls {
+        tls_config: tokio_rustls::rustls::ClientConfig,
+        server_name: ServerName<'static>,
+    },
+}
+
+#[derive(Clone)]
 pub struct Channel {
     svc: Buffer<Request<Body>, BoxFuture<'static, Result<Response<Body>, BoxError>>>,
 }
@@ -32,8 +41,7 @@ impl Channel {
     pub(crate) async fn connect(
         uri: Uri,
         connect_timeout: Option<Duration>,
-        tls_config: tokio_rustls::rustls::ClientConfig,
-        server_name: ServerName<'static>,
+        security: TransportSecurity,
     ) -> Result<Self, Error> {
         let mut http = HttpConnector::new();
         http.enforce_http(false);
@@ -42,11 +50,25 @@ impl Channel {
 
         let io = http.call(uri.clone()).await.map_err(Error::from_source)?;
         let io = io.into_inner();
-        let io = TlsConnector::new(tls_config, server_name)
-            .connect(io)
-            .await
-            .map_err(Error::from_source)?;
+        match security {
+            TransportSecurity::Plaintext => Self::handshake(uri, TokioIo::new(io)).await,
+            TransportSecurity::Tls {
+                tls_config,
+                server_name,
+            } => {
+                let io = TlsConnector::new(tls_config, server_name)
+                    .connect(io)
+                    .await
+                    .map_err(Error::from_source)?;
+                Self::handshake(uri, io).await
+            }
+        }
+    }
 
+    async fn handshake<I>(uri: Uri, io: TokioIo<I>) -> Result<Self, Error>
+    where
+        I: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+    {
         let mut builder = Builder::new(TokioExecutor::new());
         builder.timer(TokioTimer::new());
         let (send_request, connection) = builder
@@ -56,7 +78,7 @@ impl Channel {
 
         tokio::spawn(async move {
             if let Err(error) = connection.await {
-                tracing::debug!(error = ?error, "SPIFFE channel connection task failed");
+                tracing::debug!(error = ?error, "channel connection task failed");
             }
         });
 
@@ -66,14 +88,6 @@ impl Channel {
         tokio::spawn(worker);
 
         Ok(Self { svc })
-    }
-}
-
-impl Clone for Channel {
-    fn clone(&self) -> Self {
-        Self {
-            svc: self.svc.clone(),
-        }
     }
 }
 
@@ -120,13 +134,13 @@ impl Future for ResponseFuture {
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub struct Error {
-    source: Option<BoxError>,
+    source: BoxError,
 }
 
 impl Error {
     pub fn from_source(source: impl Into<BoxError>) -> Self {
         Self {
-            source: Some(source.into()),
+            source: source.into(),
         }
     }
 }
@@ -134,9 +148,7 @@ impl Error {
 impl fmt::Debug for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut tuple = f.debug_tuple("channel::Error");
-        if let Some(source) = &self.source {
-            tuple.field(source);
-        }
+        tuple.field(&self.source);
         tuple.finish()
     }
 }
@@ -149,9 +161,7 @@ impl fmt::Display for Error {
 
 impl StdError for Error {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        self.source
-            .as_ref()
-            .map(|source| &**source as &(dyn StdError + 'static))
+        Some(&*self.source)
     }
 }
 
@@ -223,7 +233,7 @@ impl<T> UserAgent<T> {
     fn new(inner: T) -> Self {
         Self {
             inner,
-            user_agent: HeaderValue::from_static(TONIC_USER_AGENT),
+            user_agent: HeaderValue::from_static(CLIENT_USER_AGENT),
         }
     }
 }
