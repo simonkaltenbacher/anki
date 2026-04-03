@@ -23,6 +23,39 @@ const DEFAULT_BUFFER_SIZE: usize = 1024;
 const CLIENT_USER_AGENT: &str = concat!("anki-api-client/", env!("CARGO_PKG_VERSION"));
 
 pub(crate) type BoxError = Box<dyn StdError + Send + Sync + 'static>;
+type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+pub struct Error {
+    source: BoxError,
+}
+
+impl Error {
+    pub fn from_source(source: impl Into<BoxError>) -> Self {
+        Self {
+            source: source.into(),
+        }
+    }
+}
+
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut tuple = f.debug_tuple("channel::Error");
+        tuple.field(&self.source);
+        tuple.finish()
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("transport error")
+    }
+}
+
+impl StdError for Error {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        Some(&*self.source)
+    }
+}
 
 pub(crate) enum TransportSecurity {
     Plaintext,
@@ -128,40 +161,6 @@ impl Future for ResponseFuture {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         Pin::new(&mut self.inner).poll(cx).map_err(Into::into)
-    }
-}
-
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
-pub struct Error {
-    source: BoxError,
-}
-
-impl Error {
-    pub fn from_source(source: impl Into<BoxError>) -> Self {
-        Self {
-            source: source.into(),
-        }
-    }
-}
-
-impl fmt::Debug for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut tuple = f.debug_tuple("channel::Error");
-        tuple.field(&self.source);
-        tuple.finish()
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("transport error")
-    }
-}
-
-impl StdError for Error {
-    fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        Some(&*self.source)
     }
 }
 
