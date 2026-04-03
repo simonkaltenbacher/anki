@@ -3,6 +3,7 @@ use std::str::FromStr;
 
 use http::Uri;
 use rustls::pki_types::ServerName;
+use tonic::transport::ClientTlsConfig;
 use tonic::transport::Endpoint;
 
 use crate::Channel;
@@ -10,16 +11,14 @@ use crate::ClientError;
 use crate::ConnectionConfig;
 use crate::TransportConfig;
 
-mod plaintext;
 mod spiffe;
-mod tls;
 
 pub(crate) async fn connect_channel(config: &ConnectionConfig) -> Result<Channel, ClientError> {
     let target = EndpointTarget::try_from(config.endpoint.as_str())?;
 
     match &config.transport {
-        TransportConfig::Plaintext => plaintext::connect_channel(&target).await,
-        TransportConfig::Tls => tls::connect_channel(&target).await,
+        TransportConfig::Plaintext => connect_tonic_channel(&target, false).await,
+        TransportConfig::Tls => connect_tonic_channel(&target, true).await,
         TransportConfig::SpiffeMtls(spiffe_config) => {
             spiffe::connect_channel(&target, spiffe_config).await
         }
@@ -57,6 +56,22 @@ impl EndpointTarget {
         Endpoint::from_shared(self.raw.clone())
             .map_err(|_| ClientError::InvalidEndpoint(self.raw.clone()))
     }
+}
+
+async fn connect_tonic_channel(
+    target: &EndpointTarget,
+    use_tls: bool,
+) -> Result<Channel, ClientError> {
+    let mut endpoint = target.to_tonic_endpoint()?;
+    if use_tls {
+        endpoint = endpoint.tls_config(ClientTlsConfig::new().with_enabled_roots())?;
+    }
+
+    endpoint
+        .connect()
+        .await
+        .map(Channel::Tonic)
+        .map_err(Into::into)
 }
 
 fn server_name_from_host(
