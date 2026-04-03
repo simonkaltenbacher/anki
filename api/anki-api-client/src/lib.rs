@@ -17,21 +17,24 @@ pub use anki_api_proto::anki::api::v1;
 pub use anki_api_proto::anki::api::v1::create_note_request;
 
 use std::collections::HashSet;
+use std::future::Future;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::task::Context;
 use std::task::Poll;
 
 use futures::Stream;
+use http::{Request as HttpRequest, Response as HttpResponse};
 use prost14::Message;
 use thiserror::Error;
 use tonic::metadata::Ascii;
 use tonic::metadata::MetadataValue;
-use tonic::transport::Channel;
 use tonic::Code;
 use tonic::Request;
 use tonic::Streaming;
 
+#[doc(hidden)]
+pub mod rustls_channel;
 mod transport;
 
 /// Raw tonic client for `HealthService`.
@@ -239,15 +242,50 @@ pub enum ClientError {
     /// SPIFFE rustls configuration error.
     #[error("spiffe tls configuration error: {0}")]
     SpiffeTls(#[from] spiffe_rustls::Error),
-    /// SPIFFE tokio handshake error.
-    #[error("spiffe tls handshake error: {0}")]
-    SpiffeTokio(#[from] spiffe_rustls_tokio::Error),
+    /// SPIFFE client channel transport error.
+    #[error("spiffe channel transport error: {0}")]
+    SpiffeChannel(#[from] rustls_channel::Error),
     /// Optimistic concurrency mismatch reported by server.
     #[error("version conflict (retryable={retryable}): {message}")]
     VersionConflict { retryable: bool, message: String },
     /// Any other RPC failure.
     #[error("rpc failed: {0}")]
     Rpc(#[from] tonic::Status),
+}
+
+/// Client channel used by generated tonic stubs.
+#[derive(Clone, Debug)]
+pub enum Channel {
+    Tonic(tonic::transport::Channel),
+    Spiffe(rustls_channel::Channel),
+}
+
+type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+impl tower::Service<HttpRequest<tonic::body::Body>> for Channel {
+    type Response = HttpResponse<tonic::body::Body>;
+    type Error = crate::rustls_channel::BoxError;
+    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        match self {
+            Self::Tonic(channel) => channel.poll_ready(cx).map_err(Into::into),
+            Self::Spiffe(channel) => channel.poll_ready(cx),
+        }
+    }
+
+    fn call(&mut self, request: HttpRequest<tonic::body::Body>) -> Self::Future {
+        match self {
+            Self::Tonic(channel) => {
+                let future = channel.call(request);
+                Box::pin(async move { future.await.map_err(Into::into) })
+            }
+            Self::Spiffe(channel) => {
+                let future = channel.call(request);
+                Box::pin(future)
+            }
+        }
+    }
 }
 
 // Manual Debug impls intentionally redact secrets so API keys/tokens are never
@@ -272,7 +310,7 @@ impl std::fmt::Debug for ConnectionConfig {
 /// High-level Anki API client with auth injection and capability bootstrap.
 #[derive(Clone)]
 pub struct ApiClient {
-    channel: tonic::transport::Channel,
+    channel: Channel,
     authorization: Option<MetadataValue<Ascii>>,
     server_info: v1::GetServerInfoResponse,
     capabilities: CapabilitySet,
@@ -281,7 +319,7 @@ pub struct ApiClient {
 impl std::fmt::Debug for ApiClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ApiClient")
-            .field("channel", &"<tonic::transport::Channel>")
+            .field("channel", &"<grpc::Channel>")
             .field("api_version", &self.server_info.api_version)
             .field("server_version", &self.server_info.server_version)
             .field("anki_version", &self.server_info.anki_version)
@@ -991,7 +1029,7 @@ mod tests {
             ClientError::SpiffeBootstrapTimeout => {}
             ClientError::Transport(_) => {}
             ClientError::SpiffeTls(_) => {}
-            ClientError::SpiffeTokio(_) => {}
+            ClientError::SpiffeChannel(_) => {}
             other => {
                 panic!("expected spiffe bootstrap-related error, got {other:?}");
             }

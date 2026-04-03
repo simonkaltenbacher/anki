@@ -436,53 +436,6 @@ fn status_from_backend_error_bytes(err_bytes: Vec<u8>) -> Status {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::service::common::TestStore;
-
-    #[test]
-    fn add_notes_rolls_back_when_a_later_item_fails() {
-        let fixture = TestStore::new("store-add-notes-rollback");
-        let store = fixture.store();
-        let notetype_id = store
-            .get_notetype_id_by_name("Basic")
-            .expect("basic notetype");
-        let deck_id = store.get_deck_id_by_name("Default").expect("default deck");
-
-        let mut valid_note = store.new_note(notetype_id).expect("new note");
-        valid_note.fields[0] = "valid-front".to_owned();
-        valid_note.fields[1] = "valid-back".to_owned();
-
-        let mut invalid_note = store.new_note(notetype_id).expect("new note");
-        invalid_note.notetype_id = i64::MAX;
-        invalid_note.fields[0] = "invalid-front".to_owned();
-        invalid_note.fields[1] = "invalid-back".to_owned();
-
-        let error = store
-            .add_notes(vec![
-                AddNoteRequest {
-                    note: Some(valid_note),
-                    deck_id,
-                },
-                AddNoteRequest {
-                    note: Some(invalid_note),
-                    deck_id,
-                },
-            ])
-            .expect_err("batch add should fail");
-
-        assert!(matches!(
-            error.code(),
-            tonic::Code::NotFound | tonic::Code::InvalidArgument
-        ));
-        let note_ids = store
-            .search_note_ids_with_query("", None)
-            .expect("search notes after rollback");
-        assert_eq!(note_ids.len(), 0);
-    }
-}
-
 fn status_from_backend_error(err: BackendError) -> Status {
     let kind = BackendErrorKind::try_from(err.kind).ok();
 
@@ -529,5 +482,52 @@ fn status_from_backend_error(err: BackendError) -> Status {
             );
             Status::internal("internal server error")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::service::common::TestStore;
+
+    #[test]
+    fn add_notes_rolls_back_when_a_later_item_fails() {
+        let fixture = TestStore::new("store-add-notes-rollback");
+        let store = fixture.store();
+        let notetype_id = store
+            .get_notetype_id_by_name("Basic")
+            .expect("basic notetype");
+        let deck_id = store.get_deck_id_by_name("Default").expect("default deck");
+
+        let mut valid_note = store.new_note(notetype_id).expect("new note");
+        valid_note.fields[0] = "valid-front".to_owned();
+        valid_note.fields[1] = "valid-back".to_owned();
+
+        let mut invalid_note = store.new_note(notetype_id).expect("new note");
+        invalid_note.notetype_id = i64::MAX;
+        invalid_note.fields[0] = "invalid-front".to_owned();
+        invalid_note.fields[1] = "invalid-back".to_owned();
+
+        let error = store
+            .add_notes(vec![
+                AddNoteRequest {
+                    note: Some(valid_note),
+                    deck_id,
+                },
+                AddNoteRequest {
+                    note: Some(invalid_note),
+                    deck_id,
+                },
+            ])
+            .expect_err("batch add should fail");
+
+        assert!(matches!(
+            error.code(),
+            tonic::Code::NotFound | tonic::Code::InvalidArgument
+        ));
+        let note_ids = store
+            .search_note_ids_with_query("", None)
+            .expect("search notes after rollback");
+        assert_eq!(note_ids.len(), 0);
     }
 }

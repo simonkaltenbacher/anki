@@ -21,7 +21,12 @@ use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Identity;
 use tonic::transport::Server;
 use tonic::transport::ServerTlsConfig;
+use tonic::transport::server::TcpConnectInfo;
 use tonic_health::ServingStatus;
+use tower_http::classify::GrpcFailureClass;
+use tower_http::trace::DefaultOnBodyChunk;
+use tower_http::trace::DefaultOnEos;
+use tower_http::trace::GrpcMakeClassifier;
 use tower_http::trace::TraceLayer;
 use tracing::Span;
 
@@ -35,6 +40,17 @@ use crate::service::notetypes::NotetypesApi;
 use crate::service::system::SystemApi;
 use crate::store;
 use crate::transport;
+use crate::transport::SpiffeConnectInfo;
+
+type GrpcTraceLayer = TraceLayer<
+    GrpcMakeClassifier,
+    fn(&HttpRequest<Body>) -> Span,
+    (),
+    fn(&HttpResponse<Body>, Duration, &Span),
+    DefaultOnBodyChunk,
+    DefaultOnEos,
+    fn(GrpcFailureClass, Duration, &Span),
+>;
 
 pub async fn serve_with_store(
     config: ServerConfig,
@@ -160,43 +176,7 @@ where
     match &config.transport_mode {
         ServerTransportMode::Plaintext => {
             Server::builder()
-                .layer(
-                    TraceLayer::new_for_grpc()
-                        .make_span_with(|request: &HttpRequest<Body>| {
-                            let user_agent = request
-                                .headers()
-                                .get("user-agent")
-                                .and_then(|value| value.to_str().ok())
-                                .unwrap_or("-");
-                            tracing::info_span!(
-                                "grpc_request",
-                                method = %request.uri().path(),
-                                user_agent = %user_agent
-                            )
-                        })
-                        .on_request(())
-                        .on_response(
-                            |response: &HttpResponse<Body>, latency: Duration, _span: &Span| {
-                                let grpc_status = response
-                                    .headers()
-                                    .get("grpc-status")
-                                    .and_then(|value| value.to_str().ok())
-                                    .unwrap_or("0");
-                                tracing::debug!(
-                                    latency_ms = latency.as_millis() as u64,
-                                    grpc_status = grpc_status,
-                                    "grpc request completed"
-                                );
-                            },
-                        )
-                        .on_failure(|failure_classification, latency: Duration, _span: &Span| {
-                            tracing::warn!(
-                                latency_ms = latency.as_millis() as u64,
-                                failure = ?failure_classification,
-                                "grpc request failed"
-                            );
-                        }),
-                )
+                .layer(make_grpc_trace_layer())
                 .add_service(standard_health_service.clone())
                 .add_service(health_service.clone())
                 .add_service(system_service.clone())
@@ -210,43 +190,7 @@ where
             let identity = load_tls_identity(&tls.cert_path, &tls.key_path)?;
             Server::builder()
                 .tls_config(ServerTlsConfig::new().identity(identity))?
-                .layer(
-                    TraceLayer::new_for_grpc()
-                        .make_span_with(|request: &HttpRequest<Body>| {
-                            let user_agent = request
-                                .headers()
-                                .get("user-agent")
-                                .and_then(|value| value.to_str().ok())
-                                .unwrap_or("-");
-                            tracing::info_span!(
-                                "grpc_request",
-                                method = %request.uri().path(),
-                                user_agent = %user_agent
-                            )
-                        })
-                        .on_request(())
-                        .on_response(
-                            |response: &HttpResponse<Body>, latency: Duration, _span: &Span| {
-                                let grpc_status = response
-                                    .headers()
-                                    .get("grpc-status")
-                                    .and_then(|value| value.to_str().ok())
-                                    .unwrap_or("0");
-                                tracing::debug!(
-                                    latency_ms = latency.as_millis() as u64,
-                                    grpc_status = grpc_status,
-                                    "grpc request completed"
-                                );
-                            },
-                        )
-                        .on_failure(|failure_classification, latency: Duration, _span: &Span| {
-                            tracing::warn!(
-                                latency_ms = latency.as_millis() as u64,
-                                failure = ?failure_classification,
-                                "grpc request failed"
-                            );
-                        }),
-                )
+                .layer(make_grpc_trace_layer())
                 .add_service(standard_health_service.clone())
                 .add_service(health_service.clone())
                 .add_service(system_service.clone())
@@ -259,43 +203,7 @@ where
         ServerTransportMode::Spiffe(spiffe) => {
             let incoming = transport::build_spiffe_incoming(listener, spiffe).await?;
             Server::builder()
-                .layer(
-                    TraceLayer::new_for_grpc()
-                        .make_span_with(|request: &HttpRequest<Body>| {
-                            let user_agent = request
-                                .headers()
-                                .get("user-agent")
-                                .and_then(|value| value.to_str().ok())
-                                .unwrap_or("-");
-                            tracing::info_span!(
-                                "grpc_request",
-                                method = %request.uri().path(),
-                                user_agent = %user_agent
-                            )
-                        })
-                        .on_request(())
-                        .on_response(
-                            |response: &HttpResponse<Body>, latency: Duration, _span: &Span| {
-                                let grpc_status = response
-                                    .headers()
-                                    .get("grpc-status")
-                                    .and_then(|value| value.to_str().ok())
-                                    .unwrap_or("0");
-                                tracing::debug!(
-                                    latency_ms = latency.as_millis() as u64,
-                                    grpc_status = grpc_status,
-                                    "grpc request completed"
-                                );
-                            },
-                        )
-                        .on_failure(|failure_classification, latency: Duration, _span: &Span| {
-                            tracing::warn!(
-                                latency_ms = latency.as_millis() as u64,
-                                failure = ?failure_classification,
-                                "grpc request failed"
-                            );
-                        }),
-                )
+                .layer(make_grpc_trace_layer())
                 .add_service(standard_health_service)
                 .add_service(health_service)
                 .add_service(system_service)
@@ -308,6 +216,69 @@ where
     }
 
     Ok(())
+}
+
+fn make_grpc_trace_layer() -> GrpcTraceLayer {
+    TraceLayer::new_for_grpc()
+        .make_span_with(make_grpc_request_span as fn(&HttpRequest<Body>) -> Span)
+        .on_request(())
+        .on_response(log_grpc_response as fn(&HttpResponse<Body>, Duration, &Span))
+        .on_failure(log_grpc_failure as fn(GrpcFailureClass, Duration, &Span))
+}
+
+fn make_grpc_request_span(request: &HttpRequest<Body>) -> Span {
+    let user_agent = request
+        .headers()
+        .get("user-agent")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("-");
+    let remote_addr = request
+        .extensions()
+        .get::<SpiffeConnectInfo>()
+        .and_then(SpiffeConnectInfo::remote_addr)
+        .or_else(|| {
+            request
+                .extensions()
+                .get::<TcpConnectInfo>()
+                .and_then(TcpConnectInfo::remote_addr)
+        })
+        .map(|addr| addr.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let spiffe_id = request
+        .extensions()
+        .get::<SpiffeConnectInfo>()
+        .and_then(SpiffeConnectInfo::peer_identity)
+        .map(|identity| identity.spiffe_id().to_owned())
+        .unwrap_or_else(|| "-".to_owned());
+
+    tracing::info_span!(
+        "grpc_request",
+        method = %request.uri().path(),
+        user_agent = %user_agent,
+        remote_addr = %remote_addr,
+        spiffe_id = %spiffe_id
+    )
+}
+
+fn log_grpc_response(response: &HttpResponse<Body>, latency: Duration, _span: &Span) {
+    let grpc_status = response
+        .headers()
+        .get("grpc-status")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("0");
+    tracing::debug!(
+        latency_ms = latency.as_millis() as u64,
+        grpc_status = grpc_status,
+        "grpc request completed"
+    );
+}
+
+fn log_grpc_failure(failure_classification: GrpcFailureClass, latency: Duration, _span: &Span) {
+    tracing::warn!(
+        latency_ms = latency.as_millis() as u64,
+        failure = ?failure_classification,
+        "grpc request failed"
+    );
 }
 
 fn load_tls_identity(
@@ -392,7 +363,6 @@ mod tests {
             anki_version: None,
             auth_disabled: false,
             allow_non_local: false,
-            allow_loopback_unauthenticated_health_check: false,
             transport_mode: crate::config::ServerTransportMode::Plaintext,
         });
 
@@ -408,7 +378,6 @@ mod tests {
             anki_version: None,
             auth_disabled: false,
             allow_non_local: false,
-            allow_loopback_unauthenticated_health_check: false,
             transport_mode: crate::config::ServerTransportMode::Plaintext,
         });
 
@@ -424,7 +393,6 @@ mod tests {
             anki_version: None,
             auth_disabled: false,
             allow_non_local: false,
-            allow_loopback_unauthenticated_health_check: false,
             transport_mode: crate::config::ServerTransportMode::Spiffe(
                 crate::config::SpiffeTransportConfig {
                     allowed_client_id: "spiffe://example.org/anki-edit".to_owned(),
@@ -445,7 +413,6 @@ mod tests {
             anki_version: None,
             auth_disabled: false,
             allow_non_local: false,
-            allow_loopback_unauthenticated_health_check: false,
             transport_mode: crate::config::ServerTransportMode::Tls(
                 crate::config::TlsTransportConfig {
                     cert_path: "/tmp/server.pem".to_owned(),

@@ -19,6 +19,7 @@ use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tonic::transport::server::Connected;
+use tonic::transport::server::TcpConnectInfo;
 
 use crate::config::SpiffeTransportConfig;
 
@@ -34,6 +35,39 @@ pub enum TransportError {
     SpiffeTls(#[from] spiffe_rustls::Error),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AuthenticatedPeerIdentity {
+    spiffe_id: String,
+}
+
+impl AuthenticatedPeerIdentity {
+    pub(crate) fn new(spiffe_id: impl Into<String>) -> Self {
+        Self {
+            spiffe_id: spiffe_id.into(),
+        }
+    }
+
+    pub(crate) fn spiffe_id(&self) -> &str {
+        &self.spiffe_id
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SpiffeConnectInfo {
+    tcp: TcpConnectInfo,
+    peer_identity: Option<AuthenticatedPeerIdentity>,
+}
+
+impl SpiffeConnectInfo {
+    pub(crate) fn remote_addr(&self) -> Option<SocketAddr> {
+        self.tcp.remote_addr()
+    }
+
+    pub(crate) fn peer_identity(&self) -> Option<&AuthenticatedPeerIdentity> {
+        self.peer_identity.as_ref()
+    }
+}
+
 pub(crate) async fn build_spiffe_incoming(
     listener: TcpListener,
     config: &SpiffeTransportConfig,
@@ -41,14 +75,31 @@ pub(crate) async fn build_spiffe_incoming(
     Pin<Box<dyn Stream<Item = Result<ConnectedSpiffeStream, std::io::Error>> + Send>>,
     TransportError,
 > {
+    let socket = config.workload_api_socket.as_deref().unwrap_or("<default>");
+    tracing::debug!(
+        allowed_client_id = config.allowed_client_id.as_str(),
+        workload_api_socket = socket,
+        "bootstrapping SPIFFE server identity"
+    );
     let source = timeout(SPIFFE_BOOTSTRAP_TIMEOUT, build_x509_source(config))
         .await
-        .map_err(|_| TransportError::SpiffeBootstrapTimeout)??;
+        .map_err(|_| {
+            tracing::warn!(
+                workload_api_socket = socket,
+                "SPIFFE server identity bootstrap timed out — \
+                 check that the SPIRE agent is running and reachable at the configured socket, \
+                 and that a workload entry is registered for this process"
+            );
+            TransportError::SpiffeBootstrapTimeout
+        })??;
+    tracing::debug!("SPIFFE server identity bootstrap succeeded");
+
     let tls_config = mtls_server(source)
         .authorize(authorizer::exact([config.allowed_client_id.as_str()])?)
         .with_alpn_protocols([b"h2"])
         .build()?;
     let acceptor = TlsAcceptor::new(Arc::new(tls_config));
+    tracing::debug!("SPIFFE TLS acceptor ready");
 
     Ok(Box::pin(stream! {
         loop {
@@ -63,7 +114,10 @@ pub(crate) async fn build_spiffe_incoming(
             match acceptor.accept(tcp_stream).await {
                 Ok((tls_stream, peer_identity)) => {
                     log_peer_identity(&peer_identity, remote_addr);
-                    yield Ok(ConnectedSpiffeStream::new(tls_stream, remote_addr));
+                    let peer_identity = peer_identity
+                        .spiffe_id()
+                        .map(|spiffe_id| AuthenticatedPeerIdentity::new(spiffe_id.to_string()));
+                    yield Ok(ConnectedSpiffeStream::new(tls_stream, remote_addr, peer_identity));
                 }
                 Err(error) => {
                     tracing::warn!(
@@ -98,13 +152,19 @@ fn log_peer_identity(peer_identity: &PeerIdentity, remote_addr: SocketAddr) {
 pub(crate) struct ConnectedSpiffeStream {
     stream: tokio_rustls::server::TlsStream<TcpStream>,
     remote_addr: SocketAddr,
+    peer_identity: Option<AuthenticatedPeerIdentity>,
 }
 
 impl ConnectedSpiffeStream {
-    fn new(stream: tokio_rustls::server::TlsStream<TcpStream>, remote_addr: SocketAddr) -> Self {
+    fn new(
+        stream: tokio_rustls::server::TlsStream<TcpStream>,
+        remote_addr: SocketAddr,
+        peer_identity: Option<AuthenticatedPeerIdentity>,
+    ) -> Self {
         Self {
             stream,
             remote_addr,
+            peer_identity,
         }
     }
 }
@@ -144,12 +204,15 @@ impl AsyncWrite for ConnectedSpiffeStream {
 }
 
 impl Connected for ConnectedSpiffeStream {
-    type ConnectInfo = tonic::transport::server::TcpConnectInfo;
+    type ConnectInfo = SpiffeConnectInfo;
 
     fn connect_info(&self) -> Self::ConnectInfo {
-        tonic::transport::server::TcpConnectInfo {
-            local_addr: self.stream.get_ref().0.local_addr().ok(),
-            remote_addr: Some(self.remote_addr),
+        SpiffeConnectInfo {
+            tcp: TcpConnectInfo {
+                local_addr: self.stream.get_ref().0.local_addr().ok(),
+                remote_addr: Some(self.remote_addr),
+            },
+            peer_identity: self.peer_identity.clone(),
         }
     }
 }

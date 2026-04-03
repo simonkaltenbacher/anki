@@ -12,7 +12,8 @@ description = "Rust client for Anki API v1"
 anki-api-proto = { path = "../anki-api-proto" }
 futures.workspace = true
 http.workspace = true
-hyper-util.workspace = true
+hyper = { workspace = true, features = ["client", "http2"] }
+hyper-util = { workspace = true, features = ["client", "client-legacy", "tokio"] }
 prost14 = { package = "prost", version = "0.14" }
 rustls.workspace = true
 spiffe.workspace = true
@@ -22,4 +23,5 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-rustls.workspace = true
 tonic = { workspace = true, features = ["tls-ring", "tls-native-roots"] }
+tracing.workspace = true
 tower.workspace = true

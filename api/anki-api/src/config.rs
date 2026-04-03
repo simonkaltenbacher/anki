@@ -35,7 +35,6 @@ pub struct RuntimeOverrides {
     pub anki_version: Option<String>,
     pub auth_disabled: Option<bool>,
     pub allow_non_local: Option<bool>,
-    pub allow_loopback_unauthenticated_health_check: Option<bool>,
     pub transport_mode: Option<String>,
     pub tls_cert_path: Option<String>,
     pub tls_key_path: Option<String>,
@@ -52,7 +51,6 @@ pub struct FileConfig {
     pub anki_version: Option<String>,
     pub auth_disabled: Option<bool>,
     pub allow_non_local: Option<bool>,
-    pub allow_loopback_unauthenticated_health_check: Option<bool>,
     pub transport_mode: Option<String>,
     pub tls_cert_path: Option<String>,
     pub tls_key_path: Option<String>,
@@ -68,7 +66,6 @@ pub struct ServerConfig {
     pub anki_version: Option<String>,
     pub auth_disabled: bool,
     pub allow_non_local: bool,
-    pub allow_loopback_unauthenticated_health_check: bool,
     pub transport_mode: ServerTransportMode,
 }
 
@@ -134,12 +131,6 @@ impl ServerConfig {
             file.allow_non_local,
             false,
         );
-        let allow_loopback_unauthenticated_health_check = pick_value(
-            runtime.allow_loopback_unauthenticated_health_check,
-            env_bool("ANKI_PUBLIC_API_ALLOW_LOOPBACK_HEALTH_WITHOUT_AUTH")?,
-            file.allow_loopback_unauthenticated_health_check,
-            false,
-        );
         let transport_mode = pick_value(
             runtime.transport_mode,
             env_transport_mode()?,
@@ -186,7 +177,6 @@ impl ServerConfig {
             },
             auth_disabled,
             allow_non_local,
-            allow_loopback_unauthenticated_health_check,
             transport_mode: resolve_transport_mode(
                 &transport_mode,
                 if tls_cert_path.is_empty() {
@@ -278,7 +268,6 @@ impl FileConfig {
             || self.anki_version.is_some()
             || self.auth_disabled.is_some()
             || self.allow_non_local.is_some()
-            || self.allow_loopback_unauthenticated_health_check.is_some()
             || self.transport_mode.is_some()
             || self.tls_cert_path.is_some()
             || self.tls_key_path.is_some()
@@ -402,7 +391,6 @@ struct FileConfigToml {
     anki_version: Option<String>,
     auth_disabled: Option<bool>,
     allow_non_local: Option<bool>,
-    allow_loopback_unauthenticated_health_check: Option<bool>,
     transport_mode: Option<String>,
     tls_cert_path: Option<String>,
     tls_key_path: Option<String>,
@@ -420,8 +408,6 @@ impl From<FileConfigToml> for FileConfig {
             anki_version: value.anki_version,
             auth_disabled: value.auth_disabled,
             allow_non_local: value.allow_non_local,
-            allow_loopback_unauthenticated_health_check: value
-                .allow_loopback_unauthenticated_health_check,
             transport_mode: value.transport_mode,
             tls_cert_path: value.tls_cert_path,
             tls_key_path: value.tls_key_path,

@@ -1,5 +1,3 @@
-use std::net::SocketAddr;
-
 use thiserror::Error;
 use tonic::Request;
 use tonic::Status;
@@ -23,7 +21,6 @@ pub struct ApiKeyAuthenticator {
     api_key: Option<String>,
     requires_api_key: bool,
     auth_disabled: bool,
-    allow_loopback_unauthenticated_health_check: bool,
 }
 
 impl ApiKeyAuthenticator {
@@ -32,23 +29,18 @@ impl ApiKeyAuthenticator {
             api_key: config.api_key.clone(),
             requires_api_key: matches!(config.transport_mode, ServerTransportMode::Tls(_)),
             auth_disabled: config.auth_disabled,
-            allow_loopback_unauthenticated_health_check: config
-                .allow_loopback_unauthenticated_health_check,
         }
     }
 
-    pub fn authenticate(&self, request: &Request<()>, is_health_check: bool) -> Result<(), Status> {
+    pub fn authenticate(
+        &self,
+        request: &Request<()>,
+        _is_health_check: bool,
+    ) -> Result<(), Status> {
         if self.auth_disabled {
             return Ok(());
         }
         if !self.requires_api_key {
-            return Ok(());
-        }
-
-        if is_health_check
-            && self.allow_loopback_unauthenticated_health_check
-            && is_loopback_peer(request.remote_addr())
-        {
             return Ok(());
         }
 
@@ -77,10 +69,6 @@ impl ApiKeyAuthenticator {
     }
 }
 
-fn is_loopback_peer(peer: Option<SocketAddr>) -> bool {
-    peer.map(|addr| addr.ip().is_loopback()).unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::ApiKeyAuthenticator;
@@ -88,7 +76,6 @@ mod tests {
     use crate::config::ServerTransportMode;
     use crate::config::TlsTransportConfig;
     use tonic::Request;
-    use tonic::transport::server::TcpConnectInfo;
 
     fn plaintext_config() -> ServerConfig {
         ServerConfig {
@@ -98,7 +85,6 @@ mod tests {
             anki_version: None,
             auth_disabled: false,
             allow_non_local: false,
-            allow_loopback_unauthenticated_health_check: false,
             transport_mode: ServerTransportMode::Plaintext,
         }
     }
@@ -111,7 +97,6 @@ mod tests {
             anki_version: None,
             auth_disabled: false,
             allow_non_local: false,
-            allow_loopback_unauthenticated_health_check: false,
             transport_mode: ServerTransportMode::Tls(TlsTransportConfig {
                 cert_path: "/tmp/server.pem".to_owned(),
                 key_path: "/tmp/server.key".to_owned(),
@@ -145,19 +130,5 @@ mod tests {
         let request = Request::new(());
         auth.authenticate(&request, false)
             .expect("auth_disabled should bypass");
-    }
-
-    #[test]
-    fn loopback_health_check_bypasses_tls_api_key_check() {
-        let mut config = tls_config();
-        config.allow_loopback_unauthenticated_health_check = true;
-        let auth = ApiKeyAuthenticator::new(&config);
-        let mut request = Request::new(());
-        request.extensions_mut().insert(TcpConnectInfo {
-            local_addr: Some(std::net::SocketAddr::from(([127, 0, 0, 1], 50051))),
-            remote_addr: Some(std::net::SocketAddr::from(([127, 0, 0, 1], 12345))),
-        });
-        auth.authenticate(&request, true)
-            .expect("loopback health check should bypass");
     }
 }

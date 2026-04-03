@@ -200,6 +200,7 @@ dependencies = [
  "anki-api-proto",
  "futures",
  "http 1.4.0",
+ "hyper 1.8.1",
  "hyper-util",
  "prost 0.14.3",
  "rustls",
@@ -211,6 +212,7 @@ dependencies = [
  "tokio-rustls",
  "tonic",
  "tower",
+ "tracing",
 ]
 
 [[package]]
@@ -1297,7 +1299,7 @@ version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fde0e0ec90c9dfb3b4b1a0891a7dcd0e2bffde2f7efed5fe7c9bb00e5bfb915e"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -3359,7 +3361,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -5140,7 +5142,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "log",
  "multimap",
  "once_cell",
@@ -5160,7 +5162,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "log",
  "multimap",
  "petgraph 0.8.3",
@@ -5181,7 +5183,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.106",
@@ -5194,7 +5196,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.106",
@@ -5388,7 +5390,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.1",
  "rustls",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "thiserror 2.0.16",
  "tokio",
  "tracing",
@@ -5425,7 +5427,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -6354,14 +6356,14 @@ dependencies = [
 [[package]]
 name = "spiffe"
 version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ce89d478a0709d93311d0ff6981902893a912cc573b00dcb40f0d15856d4950"
+source = "git+https://github.com/simonkaltenbacher/rust-spiffe?branch=main#b8373fc0e0685769d529ca9a71e6622cb83bc0f7"
 dependencies = [
  "arc-swap",
  "base64ct",
  "fastrand",
  "futures",
  "hyper-util",
+ "log",
  "pkcs8",
  "prost 0.14.3",
  "prost-types 0.14.3",
@@ -6374,6 +6376,7 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tower",
+ "tracing",
  "url",
  "x509-parser",
  "zeroize",
@@ -6382,8 +6385,7 @@ dependencies = [
 [[package]]
 name = "spiffe-rustls"
 version = "0.4.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "27a6e1c36624f25c5f4e6698558f935b4f011faedc8eee24bbd3bb9772d95f3c"
+source = "git+https://github.com/simonkaltenbacher/rust-spiffe?branch=main#b8373fc0e0685769d529ca9a71e6622cb83bc0f7"
 dependencies = [
  "oid-registry",
  "rustls",
@@ -6391,14 +6393,14 @@ dependencies = [
  "thiserror 2.0.16",
  "tokio",
  "tokio-util",
+ "tracing",
  "x509-parser",
 ]
 
 [[package]]
 name = "spiffe-rustls-tokio"
 version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f06d77fedff767b3bfe4cd69b9a0d13235e377eda5c7d47dbd7da3b96dfcf13"
+source = "git+https://github.com/simonkaltenbacher/rust-spiffe?branch=main#b8373fc0e0685769d529ca9a71e6622cb83bc0f7"
 dependencies = [
  "rustls",
  "spiffe",
