@@ -25,14 +25,16 @@ use std::task::Poll;
 use futures::Stream;
 use prost14::Message;
 use thiserror::Error;
-use tonic::metadata::Ascii;
-use tonic::metadata::MetadataValue;
 use tonic::Code;
 use tonic::Request;
 use tonic::Streaming;
+use tonic::metadata::Ascii;
+use tonic::metadata::MetadataValue;
 
 mod channel;
 mod transport;
+
+pub use channel::Channel;
 
 /// Raw tonic client for `HealthService`.
 ///
@@ -249,9 +251,6 @@ pub enum ClientError {
     #[error("rpc failed: {0}")]
     Rpc(#[from] tonic::Status),
 }
-
-/// Client channel used by generated tonic stubs.
-pub type Channel = channel::Channel;
 
 // Manual Debug impls intentionally redact secrets so API keys/tokens are never
 // exposed if client configuration/state is logged.
@@ -819,15 +818,14 @@ impl ApiClient {
     }
 
     fn map_status(status: tonic::Status) -> ClientError {
-        if status.code() == Code::Aborted {
-            if let Ok(detail) = v1::ErrorDetail::decode(status.details()) {
-                if detail.code == error_codes::VERSION_CONFLICT {
-                    return ClientError::VersionConflict {
-                        retryable: detail.retryable,
-                        message: status.message().to_owned(),
-                    };
-                }
-            }
+        if status.code() == Code::Aborted
+            && let Ok(detail) = v1::ErrorDetail::decode(status.details())
+            && detail.code == error_codes::VERSION_CONFLICT
+        {
+            return ClientError::VersionConflict {
+                retryable: detail.retryable,
+                message: status.message().to_owned(),
+            };
         }
         ClientError::Rpc(status)
     }

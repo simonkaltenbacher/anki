@@ -3,19 +3,19 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use http::Uri;
-use rustls::pki_types::ServerName;
 use rustls::RootCertStore;
+use rustls::pki_types::ServerName;
 use spiffe::X509Source;
 use spiffe_rustls::authorizer;
 use spiffe_rustls::mtls_client;
 use tokio::time::timeout;
 
-use crate::channel;
 use crate::Channel;
 use crate::ClientError;
 use crate::ConnectionConfig;
 use crate::SpiffeMtlsConfig;
 use crate::TransportConfig;
+use crate::channel;
 
 const SPIFFE_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(10);
 const SPIFFE_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -72,7 +72,7 @@ async fn connect_tls(target: &EndpointTarget) -> Result<Channel, ClientError> {
         target.uri.clone(),
         None,
         channel::TransportSecurity::Tls {
-            tls_config,
+            tls_config: Box::new(tls_config),
             server_name: target.server_name.clone(),
         },
     )
@@ -117,7 +117,7 @@ async fn connect_spiffe(
         target.uri.clone(),
         Some(SPIFFE_CONNECT_TIMEOUT),
         channel::TransportSecurity::Tls {
-            tls_config,
+            tls_config: Box::new(tls_config),
             server_name: target.server_name.clone(),
         },
     )

@@ -2,10 +2,10 @@
 name = "anki-api-client"
 version.workspace = true
 authors.workspace = true
-edition.workspace = true
+edition = "2024"
 license.workspace = true
 publish = false
-rust-version.workspace = true
+rust-version = "1.92"
 description = "Rust client for Anki API v1"
 
 [dependencies]

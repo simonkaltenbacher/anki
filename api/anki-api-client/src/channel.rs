@@ -15,9 +15,10 @@ use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use rustls::pki_types::ServerName;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_rustls::TlsConnector as RustlsConnector;
+use tokio_rustls::rustls::ClientConfig;
 use tonic::body::Body;
-use tower::buffer::{future::ResponseFuture as BufferResponseFuture, Buffer};
 use tower::Service;
+use tower::buffer::{Buffer, future::ResponseFuture as BufferResponseFuture};
 
 const DEFAULT_BUFFER_SIZE: usize = 1024;
 const CLIENT_USER_AGENT: &str = concat!("anki-api-client/", env!("CARGO_PKG_VERSION"));
@@ -60,7 +61,8 @@ impl StdError for Error {
 pub(crate) enum TransportSecurity {
     Plaintext,
     Tls {
-        tls_config: tokio_rustls::rustls::ClientConfig,
+        // Box the large rustls config so this short-lived setup enum stays compact.
+        tls_config: Box<ClientConfig>,
         server_name: ServerName<'static>,
     },
 }
@@ -89,7 +91,7 @@ impl Channel {
                 tls_config,
                 server_name,
             } => {
-                let io = TlsConnector::new(tls_config, server_name)
+                let io = TlsConnector::new(*tls_config, server_name)
                     .connect(io)
                     .await
                     .map_err(Error::from_source)?;
@@ -257,15 +259,12 @@ where
 }
 
 struct TlsConnector {
-    config: Arc<tokio_rustls::rustls::ClientConfig>,
+    config: Arc<ClientConfig>,
     server_name: ServerName<'static>,
 }
 
 impl TlsConnector {
-    fn new(
-        mut config: tokio_rustls::rustls::ClientConfig,
-        server_name: ServerName<'static>,
-    ) -> Self {
+    fn new(mut config: ClientConfig, server_name: ServerName<'static>) -> Self {
         if !config
             .alpn_protocols
             .iter()

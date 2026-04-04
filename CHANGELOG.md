@@ -2,6 +2,31 @@
 
 This file tracks local changes on top of upstream Anki.
 
+## 2026-04-04 (Unreleased)
+
+### Added
+
+- [api] Added server-side standard TLS and SPIFFE mTLS transport support, including TLS identity loading, inbound SPIFFE TLS acceptor wiring, authenticated peer identity extraction, and SPIFFE connect metadata for gRPC requests.
+- [api-client] Added transport selection to `ConnectionConfig` with plaintext, standard TLS, and SPIFFE mTLS modes.
+- [api-client] Added a custom shared gRPC channel implementation for plaintext/TLS/SPIFFE transport, including native-root TLS setup and SPIFFE-backed rustls configuration.
+- [api] Added `auth.spiffe_mtls` capability advertisement when the server is configured for SPIFFE transport.
+
+### Changed
+
+- [api] Refactored server configuration to use explicit connection modes:
+  `Plaintext`,
+  `Tls { tls, auth }`,
+  `Spiffe(...)`.
+- [api] Refactored gRPC server startup around `grpc::GrpcServer`, consolidating startup reporting, service wiring, transport setup, and logging.
+- [api] Startup logging now reports transport/auth mode separately and includes remote address / SPIFFE identity information in gRPC request spans where available.
+- [api] `BackendStore` is now passed directly without an additional outer `Arc`, since the underlying Anki backend already shares state internally.
+- [api-client] Unified plaintext, TLS, and SPIFFE onto one custom channel path and removed the previous mixed tonic/custom transport split.
+
+### Fixed
+
+- [api] Readiness/startup signaling now fires only after transport-specific setup succeeds, avoiding false-ready reports when TLS identity loading or SPIFFE bootstrap fails.
+- [api-client] Fixed client user-agent reporting so requests identify as `anki-api-client/<version>` instead of misreporting a tonic version string.
+
 ## 2026-03-18 (Unreleased)
 
 ### Added
