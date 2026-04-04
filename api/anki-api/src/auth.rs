@@ -1,11 +1,11 @@
-use std::net::SocketAddr;
-
 use thiserror::Error;
 use tonic::Request;
 use tonic::Status;
 use tonic::metadata::MetadataMap;
 
 use crate::config::ServerConfig;
+use crate::config::ServerConnectionMode;
+use crate::config::TlsAuthMode;
 
 #[derive(Debug, Error)]
 pub enum AuthError {
@@ -20,29 +20,27 @@ pub enum AuthError {
 #[derive(Clone, Debug)]
 pub struct ApiKeyAuthenticator {
     api_key: Option<String>,
-    auth_disabled: bool,
-    allow_loopback_unauthenticated_health_check: bool,
 }
 
 impl ApiKeyAuthenticator {
     pub fn new(config: &ServerConfig) -> Self {
         Self {
-            api_key: config.api_key.clone(),
-            auth_disabled: config.auth_disabled,
-            allow_loopback_unauthenticated_health_check: config
-                .allow_loopback_unauthenticated_health_check,
+            api_key: match &config.connection_mode {
+                ServerConnectionMode::Tls {
+                    auth: TlsAuthMode::ApiKey(api_key),
+                    ..
+                } => Some(api_key.clone()),
+                _ => None,
+            },
         }
     }
 
-    pub fn authenticate(&self, request: &Request<()>, is_health_check: bool) -> Result<(), Status> {
-        if self.auth_disabled {
-            return Ok(());
-        }
-
-        if is_health_check
-            && self.allow_loopback_unauthenticated_health_check
-            && is_loopback_peer(request.remote_addr())
-        {
+    pub fn authenticate(
+        &self,
+        request: &Request<()>,
+        _is_health_check: bool,
+    ) -> Result<(), Status> {
+        if self.api_key.is_none() {
             return Ok(());
         }
 
@@ -71,6 +69,74 @@ impl ApiKeyAuthenticator {
     }
 }
 
-fn is_loopback_peer(peer: Option<SocketAddr>) -> bool {
-    peer.map(|addr| addr.ip().is_loopback()).unwrap_or(false)
+#[cfg(test)]
+mod tests {
+    use super::ApiKeyAuthenticator;
+    use crate::config::ServerConfig;
+    use crate::config::ServerConnectionMode;
+    use crate::config::TlsAuthMode;
+    use crate::config::TlsTransportConfig;
+    use tonic::Request;
+
+    fn plaintext_config() -> ServerConfig {
+        ServerConfig {
+            host: "127.0.0.1".to_owned(),
+            port: 50051,
+            anki_version: None,
+            allow_non_local: false,
+            connection_mode: ServerConnectionMode::Plaintext,
+        }
+    }
+
+    fn tls_config() -> ServerConfig {
+        ServerConfig {
+            host: "127.0.0.1".to_owned(),
+            port: 50051,
+            anki_version: None,
+            allow_non_local: false,
+            connection_mode: ServerConnectionMode::Tls {
+                tls: TlsTransportConfig {
+                    cert_path: "/tmp/server.pem".to_owned(),
+                    key_path: "/tmp/server.key".to_owned(),
+                },
+                auth: TlsAuthMode::ApiKey("test-key".to_owned()),
+            },
+        }
+    }
+
+    #[test]
+    fn plaintext_mode_does_not_require_api_key() {
+        let auth = ApiKeyAuthenticator::new(&plaintext_config());
+        let request = Request::new(());
+        auth.authenticate(&request, false)
+            .expect("plaintext should pass through");
+    }
+
+    #[test]
+    fn tls_mode_rejects_missing_api_key() {
+        let auth = ApiKeyAuthenticator::new(&tls_config());
+        let request = Request::new(());
+        let error = auth
+            .authenticate(&request, false)
+            .expect_err("tls should require auth header");
+        assert_eq!(error.code(), tonic::Code::Unauthenticated);
+    }
+
+    #[test]
+    fn auth_disabled_bypasses_tls_api_key_check() {
+        let config = ServerConfig {
+            connection_mode: ServerConnectionMode::Tls {
+                tls: TlsTransportConfig {
+                    cert_path: "/tmp/server.pem".to_owned(),
+                    key_path: "/tmp/server.key".to_owned(),
+                },
+                auth: TlsAuthMode::Disabled,
+            },
+            ..plaintext_config()
+        };
+        let auth = ApiKeyAuthenticator::new(&config);
+        let request = Request::new(());
+        auth.authenticate(&request, false)
+            .expect("auth_disabled should bypass");
+    }
 }

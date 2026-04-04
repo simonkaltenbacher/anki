@@ -112,14 +112,11 @@ impl Backend {
                 };
 
                 runtime.block_on(async move {
-                    if let Err(err) = grpc::serve_with_store_and_shutdown_and_ready(
-                        config,
-                        store,
-                        async move {
-                            let _ = shutdown_rx.await;
-                        },
-                        Some(ready_tx),
-                    )
+                    if let Err(err) = grpc::GrpcServer::new(config, store, async move {
+                        let _ = shutdown_rx.await;
+                    })
+                    .with_startup_status(ready_tx)
+                    .serve()
                     .await
                     {
                         eprintln!("anki api server terminated with error: {err}");
@@ -226,10 +223,11 @@ fn parse_runtime_overrides(dict: Option<&Bound<'_, PyDict>>) -> PyResult<Runtime
         anki_version: extract_string(dict, "anki_version")?,
         auth_disabled: extract_bool(dict, "auth_disabled")?,
         allow_non_local: extract_bool(dict, "allow_non_local")?,
-        allow_loopback_unauthenticated_health_check: extract_bool(
-            dict,
-            "allow_loopback_unauthenticated_health_check",
-        )?,
+        transport_mode: extract_string(dict, "transport_mode")?,
+        tls_cert_path: extract_string(dict, "tls_cert_path")?,
+        tls_key_path: extract_string(dict, "tls_key_path")?,
+        spiffe_allowed_client_id: extract_string(dict, "spiffe_allowed_client_id")?,
+        spiffe_workload_api_socket: extract_string(dict, "spiffe_workload_api_socket")?,
     })
 }
 

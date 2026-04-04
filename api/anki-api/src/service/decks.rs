@@ -8,15 +8,15 @@ use tonic::Request;
 use tonic::Response;
 use tonic::Status;
 
-use crate::store::SharedStore;
+use crate::store::BackendStore;
 
 #[derive(Clone)]
 pub struct DecksApi {
-    store: SharedStore,
+    store: BackendStore,
 }
 
 impl DecksApi {
-    pub fn new(store: SharedStore) -> Self {
+    pub fn new(store: BackendStore) -> Self {
         Self { store }
     }
 }

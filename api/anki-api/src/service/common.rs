@@ -149,7 +149,7 @@ where
 #[cfg(test)]
 pub(crate) struct TestStore {
     root: PathBuf,
-    store: Option<crate::store::SharedStore>,
+    store: Option<crate::store::BackendStore>,
 }
 
 #[cfg(test)]
@@ -171,7 +171,7 @@ impl TestStore {
         }
     }
 
-    pub(crate) fn store(&self) -> crate::store::SharedStore {
+    pub(crate) fn store(&self) -> crate::store::BackendStore {
         self.store.as_ref().expect("store initialized").clone()
     }
 }

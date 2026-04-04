@@ -25,33 +25,37 @@ use std::task::Poll;
 use futures::Stream;
 use prost14::Message;
 use thiserror::Error;
-use tonic::metadata::Ascii;
-use tonic::metadata::MetadataValue;
 use tonic::Code;
 use tonic::Request;
 use tonic::Streaming;
+use tonic::metadata::Ascii;
+use tonic::metadata::MetadataValue;
+
+mod channel;
+mod transport;
+
+pub use channel::Channel;
 
 /// Raw tonic client for `HealthService`.
 ///
 /// Prefer [`ApiClient`] for auth injection, capability bootstrap, and typed errors.
-pub type HealthClient = v1::health_service_client::HealthServiceClient<tonic::transport::Channel>;
+pub type HealthClient = v1::health_service_client::HealthServiceClient<Channel>;
 /// Raw tonic client for `DecksService`.
 ///
 /// Prefer [`ApiClient`] for auth injection, capability bootstrap, and typed errors.
-pub type DecksClient = v1::decks_service_client::DecksServiceClient<tonic::transport::Channel>;
+pub type DecksClient = v1::decks_service_client::DecksServiceClient<Channel>;
 /// Raw tonic client for `SystemService`.
 ///
 /// Prefer [`ApiClient`] for auth injection, capability bootstrap, and typed errors.
-pub type SystemClient = v1::system_service_client::SystemServiceClient<tonic::transport::Channel>;
+pub type SystemClient = v1::system_service_client::SystemServiceClient<Channel>;
 /// Raw tonic client for `NotesService`.
 ///
 /// Prefer [`ApiClient`] for auth injection, capability bootstrap, and typed errors.
-pub type NotesClient = v1::notes_service_client::NotesServiceClient<tonic::transport::Channel>;
+pub type NotesClient = v1::notes_service_client::NotesServiceClient<Channel>;
 /// Raw tonic client for `NotetypesService`.
 ///
 /// Prefer [`ApiClient`] for auth injection, capability bootstrap, and typed errors.
-pub type NotetypesClient =
-    v1::notetypes_service_client::NotetypesServiceClient<tonic::transport::Channel>;
+pub type NotetypesClient = v1::notetypes_service_client::NotetypesServiceClient<Channel>;
 
 const AUTH_HEADER: &str = "authorization";
 const BEARER_PREFIX: &str = "Bearer ";
@@ -93,6 +97,7 @@ pub enum Capability {
     NotetypesChanges,
     NotetypesCount,
     AuthApiKey,
+    AuthSpiffeMtls,
 }
 
 impl Capability {
@@ -126,6 +131,7 @@ impl Capability {
             "notetypes.changes" => Some(Self::NotetypesChanges),
             "notetypes.count" => Some(Self::NotetypesCount),
             "auth.api_key" => Some(Self::AuthApiKey),
+            "auth.spiffe_mtls" => Some(Self::AuthSpiffeMtls),
             _ => None,
         }
     }
@@ -161,6 +167,21 @@ pub struct ConnectionConfig {
     pub endpoint: String,
     /// Optional API key used as `Authorization: Bearer <key>`.
     pub api_key: Option<String>,
+    /// Transport settings for the gRPC channel.
+    pub transport: TransportConfig,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TransportConfig {
+    Plaintext,
+    Tls,
+    SpiffeMtls(SpiffeMtlsConfig),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpiffeMtlsConfig {
+    pub expected_server_id: String,
+    pub workload_api_socket: Option<String>,
 }
 
 impl ConnectionConfig {
@@ -169,12 +190,32 @@ impl ConnectionConfig {
         Self {
             endpoint: endpoint.into(),
             api_key: None,
+            transport: TransportConfig::Plaintext,
         }
     }
 
     /// Sets the API key used for bearer authentication.
     pub fn with_api_key(mut self, api_key: impl Into<String>) -> Self {
         self.api_key = Some(api_key.into());
+        self
+    }
+
+    /// Enables one-way TLS using the configured platform/webpki root store.
+    pub fn with_tls(mut self) -> Self {
+        self.transport = TransportConfig::Tls;
+        self
+    }
+
+    /// Enables SPIFFE-backed mutual TLS with an exact expected server SPIFFE ID.
+    pub fn with_spiffe_mtls(
+        mut self,
+        expected_server_id: impl Into<String>,
+        workload_api_socket: Option<String>,
+    ) -> Self {
+        self.transport = TransportConfig::SpiffeMtls(SpiffeMtlsConfig {
+            expected_server_id: expected_server_id.into(),
+            workload_api_socket,
+        });
         self
     }
 }
@@ -188,9 +229,21 @@ pub enum ClientError {
     /// API key could not be encoded as gRPC metadata.
     #[error("invalid api key metadata value")]
     InvalidApiKeyMetadata,
-    /// Transport setup/connectivity error.
-    #[error("transport error: {0}")]
-    Transport(#[from] tonic::transport::Error),
+    /// SPIFFE X.509 source/bootstrap error.
+    #[error("spiffe source error: {0}")]
+    SpiffeSource(#[from] spiffe::x509_source::X509SourceError),
+    /// SPIFFE identity bootstrap timed out.
+    #[error("timed out waiting for SPIFFE identity bootstrap")]
+    SpiffeBootstrapTimeout,
+    /// SPIFFE rustls configuration error.
+    #[error("spiffe tls configuration error: {0}")]
+    SpiffeTls(#[from] spiffe_rustls::Error),
+    /// TLS configuration error.
+    #[error("tls configuration error: {0}")]
+    TlsConfig(String),
+    /// Client channel transport error.
+    #[error("channel transport error: {0}")]
+    Channel(#[from] channel::Error),
     /// Optimistic concurrency mismatch reported by server.
     #[error("version conflict (retryable={retryable}): {message}")]
     VersionConflict { retryable: bool, message: String },
@@ -213,6 +266,7 @@ impl std::fmt::Debug for ConnectionConfig {
                     .map(|_| "<redacted>")
                     .unwrap_or("<none>"),
             )
+            .field("transport", &self.transport)
             .finish()
     }
 }
@@ -220,7 +274,7 @@ impl std::fmt::Debug for ConnectionConfig {
 /// High-level Anki API client with auth injection and capability bootstrap.
 #[derive(Clone)]
 pub struct ApiClient {
-    channel: tonic::transport::Channel,
+    channel: Channel,
     authorization: Option<MetadataValue<Ascii>>,
     server_info: v1::GetServerInfoResponse,
     capabilities: CapabilitySet,
@@ -229,7 +283,7 @@ pub struct ApiClient {
 impl std::fmt::Debug for ApiClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ApiClient")
-            .field("channel", &"<tonic::transport::Channel>")
+            .field("channel", &"<grpc::Channel>")
             .field("api_version", &self.server_info.api_version)
             .field("server_version", &self.server_info.server_version)
             .field("anki_version", &self.server_info.anki_version)
@@ -251,7 +305,7 @@ impl ApiClient {
     ///
     /// This method fails fast if the server is unreachable or auth is invalid.
     pub async fn connect(config: ConnectionConfig) -> Result<Self, ClientError> {
-        let channel = connect_channel(&config.endpoint).await?;
+        let channel = transport::connect(&config).await?;
         let authorization = if let Some(api_key) = config.api_key {
             let value = format!("{BEARER_PREFIX}{api_key}");
             let metadata =
@@ -764,15 +818,14 @@ impl ApiClient {
     }
 
     fn map_status(status: tonic::Status) -> ClientError {
-        if status.code() == Code::Aborted {
-            if let Ok(detail) = v1::ErrorDetail::decode(status.details()) {
-                if detail.code == error_codes::VERSION_CONFLICT {
-                    return ClientError::VersionConflict {
-                        retryable: detail.retryable,
-                        message: status.message().to_owned(),
-                    };
-                }
-            }
+        if status.code() == Code::Aborted
+            && let Ok(detail) = v1::ErrorDetail::decode(status.details())
+            && detail.code == error_codes::VERSION_CONFLICT
+        {
+            return ClientError::VersionConflict {
+                retryable: detail.retryable,
+                message: status.message().to_owned(),
+            };
         }
         ClientError::Rpc(status)
     }
@@ -811,16 +864,6 @@ impl<T> Stream for ResponseStream<T> {
 pub type NotesStream = ResponseStream<v1::ListNotesResponse>;
 /// Stream of `ListNoteRefsResponse` messages.
 pub type NoteRefsStream = ResponseStream<v1::ListNoteRefsResponse>;
-
-/// Connects a raw tonic channel to an Anki API endpoint.
-pub async fn connect_channel(
-    endpoint: impl AsRef<str>,
-) -> Result<tonic::transport::Channel, ClientError> {
-    let endpoint_str = endpoint.as_ref().to_owned();
-    let endpoint = tonic::transport::Endpoint::from_shared(endpoint_str.clone())
-        .map_err(|_| ClientError::InvalidEndpoint(endpoint_str))?;
-    endpoint.connect().await.map_err(Into::into)
-}
 
 fn parse_capabilities(values: &[String]) -> CapabilitySet {
     let known = values
@@ -892,6 +935,74 @@ mod tests {
         match error {
             ClientError::Rpc(status) => assert_eq!(status.code(), Code::NotFound),
             other => panic!("expected rpc error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn connection_config_defaults_to_plaintext_transport() {
+        let config = ConnectionConfig::new("http://127.0.0.1:50051");
+        assert_eq!(config.transport, TransportConfig::Plaintext);
+    }
+
+    #[test]
+    fn connection_config_can_enable_spiffe_transport() {
+        let config = ConnectionConfig::new("https://127.0.0.1:50051").with_spiffe_mtls(
+            "spiffe://example.org/server",
+            Some("unix:///tmp/spire-agent.sock".to_string()),
+        );
+
+        assert_eq!(
+            config.transport,
+            TransportConfig::SpiffeMtls(SpiffeMtlsConfig {
+                expected_server_id: "spiffe://example.org/server".to_string(),
+                workload_api_socket: Some("unix:///tmp/spire-agent.sock".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn connection_config_can_enable_tls_transport() {
+        let config = ConnectionConfig::new("https://127.0.0.1:50051").with_tls();
+        assert_eq!(config.transport, TransportConfig::Tls);
+    }
+
+    #[test]
+    fn connection_config_debug_redacts_api_key() {
+        let debug = format!(
+            "{:?}",
+            ConnectionConfig::new("http://127.0.0.1:50051").with_api_key("secret")
+        );
+
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("secret"));
+    }
+
+    #[tokio::test]
+    async fn spiffe_transport_dispatch_returns_bootstrap_error_without_workload_api() {
+        let config = ConnectionConfig::new("https://127.0.0.1:50051").with_spiffe_mtls(
+            "spiffe://example.org/server",
+            Some("unix:///tmp/anki-api-client-missing-spire.sock".to_string()),
+        );
+
+        let error = transport::connect(&config).await.expect_err("should fail");
+        match error {
+            ClientError::SpiffeSource(_) => {}
+            ClientError::SpiffeBootstrapTimeout => {}
+            ClientError::SpiffeTls(_) => {}
+            ClientError::Channel(_) => {}
+            other => {
+                panic!("expected spiffe bootstrap-related error, got {other:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn tls_transport_dispatch_rejects_invalid_endpoint() {
+        let config = ConnectionConfig::new("https:// bad endpoint").with_tls();
+        let error = transport::connect(&config).await.expect_err("should fail");
+        match error {
+            ClientError::InvalidEndpoint(_) => {}
+            other => panic!("expected invalid endpoint error, got {other:?}"),
         }
     }
 }
