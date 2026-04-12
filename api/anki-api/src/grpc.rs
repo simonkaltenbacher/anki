@@ -82,7 +82,13 @@ where
     }
 
     pub async fn serve(mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let bind_addr = resolve_bind_addr(&self.config)?;
+        let bind_addr = match resolve_bind_addr(&self.config) {
+            Ok(bind_addr) => bind_addr,
+            Err(err) => {
+                self.report_startup(Err(self.startup_error_message(err.as_ref())));
+                return Err(err);
+            }
+        };
         let auth = Arc::new(ApiKeyAuthenticator::new(&self.config));
 
         let health_api = HealthApi::new(self.store.clone());
@@ -134,10 +140,22 @@ where
                 .add_service(notes_service)
                 .add_service(notetypes_service)
         };
-        let server = self.configure_server()?;
+        let server = match self.configure_server() {
+            Ok(server) => server,
+            Err(err) => {
+                self.report_startup(Err(self.startup_error_message(err.as_ref())));
+                return Err(err);
+            }
+        };
 
         if let ServerConnectionMode::Spiffe(spiffe) = &self.config.connection_mode {
-            let incoming = transport::build_spiffe_incoming(listener, spiffe).await?;
+            let incoming = match transport::build_spiffe_incoming(listener, spiffe).await {
+                Ok(incoming) => incoming,
+                Err(err) => {
+                    self.report_startup(Err(self.startup_error_message(&err)));
+                    return Err(Box::new(err));
+                }
+            };
             self.report_startup(Ok(()));
             add_services(server)
                 .serve_with_incoming_shutdown(incoming, self.shutdown_signal)
@@ -151,7 +169,6 @@ where
                 )
                 .await?;
         }
-
         Ok(())
     }
 
@@ -162,9 +179,7 @@ where
         match TcpListener::bind(bind_addr).await {
             Ok(listener) => Ok(listener),
             Err(err) => {
-                self.report_startup(Err(format!(
-                    "failed to bind api server on {bind_addr}: {err}"
-                )));
+                self.report_startup(Err(self.startup_error_message(&err)));
                 Err(Box::new(err))
             }
         }
@@ -211,6 +226,24 @@ where
     fn report_startup(&mut self, status: Result<(), String>) {
         if let Some(tx) = self.startup_status_tx.take() {
             let _ = tx.send(status);
+        }
+    }
+
+    fn startup_error_message(&self, err: &dyn std::error::Error) -> String {
+        let bind_addr = self.config.bind_addr();
+        match &self.config.connection_mode {
+            ServerConnectionMode::Spiffe(spiffe) => format!(
+                "failed to start api server (transport=spiffe_mtls, bind_addr={bind_addr}, \
+                 spiffe_allowed_client_id={}, spiffe_workload_api_socket={}): {err}",
+                spiffe.allowed_client_id,
+                spiffe.workload_api_socket.as_deref().unwrap_or("<default>"),
+            ),
+            ServerConnectionMode::Tls { .. } => {
+                format!("failed to start api server (transport=tls, bind_addr={bind_addr}): {err}")
+            }
+            ServerConnectionMode::Plaintext => format!(
+                "failed to start api server (transport=plaintext, bind_addr={bind_addr}): {err}"
+            ),
         }
     }
 

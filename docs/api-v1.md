@@ -38,13 +38,56 @@ Compatibility is additive within `v1`:
 2. `server_version`: `anki-api` server implementation version.
 3. `anki_version`: host Anki application version when provided by server startup config.
 
-## Authentication
+## Transports & Authentication
 
-By default, API key auth is enabled:
+`anki-api` supports three connection modes. The mode is selected via the
+`transport_mode` config key (`ANKI_PUBLIC_API_TRANSPORT_MODE` env var, or
+runtime override). Each mode has a different authentication model and is
+incompatible with credentials from another mode (for example, `api_key` is
+only valid in `tls` mode).
 
-1. Header: `authorization: Bearer <api_key>`
-2. Missing/invalid key returns `UNAUTHENTICATED`.
-3. Server capabilities include `auth.api_key` when auth is enabled.
+### `plaintext` (default)
+
+1. Cleartext gRPC over TCP. No transport security.
+2. No authentication enforced at the API layer.
+3. Loopback-only by default (`allow_non_local=false`); non-loopback binds
+   require `allow_non_local=true`.
+4. `api_key` is rejected in this mode (`ApiKeyRequiresTls` config error).
+5. Intended for local development and intra-host integrations on a trusted
+   loopback interface.
+
+### `tls`
+
+1. Server-side TLS. Requires `tls_cert_path` and `tls_key_path`.
+2. Authentication is API key by default
+   (header: `authorization: Bearer <api_key>`).
+   - Missing/invalid key returns `UNAUTHENTICATED`.
+   - `api_key` is required unless `auth_disabled=true`.
+3. With `auth_disabled=true`, the server logs a startup warning that requests
+   will not require an API key.
+4. Capability `auth.api_key` is advertised when API-key auth is active.
+
+### `spiffe_mtls`
+
+1. Mutual TLS with SPIFFE X.509 SVIDs on both sides, bootstrapped via the
+   SPIFFE Workload API.
+2. The server fetches its own SVID from the Workload API at startup. Bootstrap
+   has a 10-second timeout. If the SPIRE agent is not reachable on the
+   configured socket, or no workload entry is registered for the server
+   process, startup fails fast with a structured error and the gRPC server
+   does not come up.
+3. Peers are authorized by exact match against `spiffe_allowed_client_id` (a
+   single SPIFFE ID). Peers presenting a different SPIFFE ID — or no SVID at
+   all — are rejected at the TLS layer before any gRPC handler runs.
+4. `api_key` is rejected in this mode; SPIFFE peer identity is the sole
+   credential.
+5. The Workload API socket defaults to the SPIFFE-standard endpoint
+   (`/tmp/spire-agent/public/api.sock` on macOS/Linux). It can be overridden
+   per-process via `spiffe_workload_api_socket`.
+6. Capability `auth.spiffe_mtls` is advertised when SPIFFE mTLS is active.
+7. Reference client: the `anki-edit` CLI uses `anki-api-client`'s
+   `TransportConfig::SpiffeMtls` mode and authorizes the server by SPIFFE ID
+   in the same way.
 
 ## Configuration
 
@@ -81,7 +124,11 @@ gRPC thread:
 4. `ANKI_PUBLIC_API_KEY`
 5. `ANKI_PUBLIC_API_AUTH_DISABLED` (`true/false`, `1/0`)
 6. `ANKI_PUBLIC_API_ALLOW_NON_LOCAL` (`true/false`, `1/0`)
-7. `ANKI_PUBLIC_API_ALLOW_LOOPBACK_HEALTH_WITHOUT_AUTH` (`true/false`, `1/0`)
+7. `ANKI_PUBLIC_API_TRANSPORT_MODE` (`plaintext`, `tls`, `spiffe`; case-insensitive)
+8. `ANKI_PUBLIC_API_TLS_CERT_PATH` (PEM file; required for `tls`)
+9. `ANKI_PUBLIC_API_TLS_KEY_PATH` (PEM file; required for `tls`)
+10. `ANKI_PUBLIC_API_SPIFFE_ALLOWED_CLIENT_ID` (SPIFFE ID; required for `spiffe`)
+11. `ANKI_PUBLIC_API_SPIFFE_WORKLOAD_API_SOCKET` (Workload API socket path; optional, defaults to the SPIFFE standard endpoint)
 
 ### Supported profile config keys
 
@@ -105,17 +152,39 @@ The API server can load file-based defaults from:
 2. Linux: `~/.local/share/Anki2/public-api.toml`
 3. Windows: `%APPDATA%\\Anki2\\public-api.toml`
 
-Example:
+Examples, one per transport mode:
 
 ```toml
+# plaintext: loopback-only, no authentication
 [anki_public_api]
 enabled = true
 host = "127.0.0.1"
 port = 50051
+transport_mode = "plaintext"
+```
+
+```toml
+# tls: server cert + API-key authentication
+[anki_public_api]
+enabled = true
+host = "127.0.0.1"
+port = 50051
+transport_mode = "tls"
+tls_cert_path = "/path/to/server.pem"
+tls_key_path = "/path/to/server.key"
 api_key = "replace-with-strong-random-key"
 auth_disabled = false
-allow_non_local = false
-allow_loopback_unauthenticated_health_check = false
+```
+
+```toml
+# spiffe_mtls: SPIFFE workload identity, no API key
+[anki_public_api]
+enabled = true
+host = "127.0.0.1"
+port = 50051
+transport_mode = "spiffe"
+spiffe_allowed_client_id = "spiffe://localhost/anki-edit"
+# spiffe_workload_api_socket is optional; defaults to the SPIFFE standard endpoint
 ```
 
 Process environment variables still override file values.
@@ -229,7 +298,8 @@ Current server capability keys:
 25. `notetypes.update_css.batch`
 26. `notetypes.changes`
 27. `notetypes.count`
-28. `auth.api_key` (only when auth is enabled)
+28. `auth.api_key` (only when transport is `tls` and API-key auth is enabled)
+29. `auth.spiffe_mtls` (only when transport is `spiffe`)
 
 ## RPC Set (Current V1)
 

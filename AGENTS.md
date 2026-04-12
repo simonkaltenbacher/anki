@@ -36,6 +36,8 @@
 - To materialize pinned tool binaries (including `protoc`), ensure `n2` is installed and run Ninja targets.
   - Install: `bash tools/install-n2`
   - Provision protoc: `./ninja extract_protoc_bin` (or `./ninja protoc_binary`)
+- Preferred local macOS app install command from repo root:
+  - `ANKI_LOCAL_INSTALL_PATH="$HOME/Applications/Anki.app" ./qt/launcher/mac/build-local.sh`
 
 ## Architecture Notes (Practical)
 

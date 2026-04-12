@@ -24,8 +24,8 @@ spiffe-rustls.workspace = true
 spiffe-rustls-tokio.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-tokio-stream.workspace = true
 tokio-rustls.workspace = true
+tokio-stream.workspace = true
 toml.workspace = true
 tonic = { workspace = true, features = ["tls-ring"] }
 tonic-health.workspace = true

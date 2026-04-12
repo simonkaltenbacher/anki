@@ -8,6 +8,7 @@ use anki::sync::http_server::SimpleServer;
 use anki_api::config::FileConfig;
 use anki_api::config::RuntimeOverrides;
 use anki_api::config::ServerConfig;
+use anki_api::config::ServerConnectionMode;
 use anki_api::grpc;
 use anki_api::logging;
 use anki_api::store;
@@ -89,6 +90,7 @@ impl Backend {
         let runtime_overrides = parse_runtime_overrides(runtime_overrides)?;
         let config = ServerConfig::resolve(runtime_overrides, file_config)
             .map_err(|err| PyException::new_err(err.to_string()))?;
+        let startup_context = api_server_startup_context(&config);
         logging::init_stderr_logging();
 
         let store = store::shared_store_from_backend(self.backend.clone());
@@ -136,7 +138,9 @@ impl Backend {
                 let _ = shutdown_tx.send(());
                 let _ = join_handle.join();
                 return Err(PyException::new_err(format!(
-                    "api server did not signal readiness: {err}"
+                    "api server did not signal readiness within 10 seconds ({startup_context}): \
+                     {err}; startup may be blocked before reporting readiness, for example during \
+                     SPIFFE or TLS initialization"
                 )));
             }
         }
@@ -234,6 +238,24 @@ fn parse_runtime_overrides(dict: Option<&Bound<'_, PyDict>>) -> PyResult<Runtime
 impl Drop for Backend {
     fn drop(&mut self) {
         let _ = stop_api_server_impl(&self.api_server);
+    }
+}
+
+fn api_server_startup_context(config: &ServerConfig) -> String {
+    match &config.connection_mode {
+        ServerConnectionMode::Spiffe(spiffe) => format!(
+            "transport=spiffe_mtls, bind_addr={}, spiffe_allowed_client_id={}, \
+             spiffe_workload_api_socket={}",
+            config.bind_addr(),
+            spiffe.allowed_client_id,
+            spiffe.workload_api_socket.as_deref().unwrap_or("<default>"),
+        ),
+        ServerConnectionMode::Tls { .. } => {
+            format!("transport=tls, bind_addr={}", config.bind_addr())
+        }
+        ServerConnectionMode::Plaintext => {
+            format!("transport=plaintext, bind_addr={}", config.bind_addr())
+        }
     }
 }
 
