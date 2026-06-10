@@ -9,6 +9,10 @@ RESOURCES_DIR="$APP_LAUNCHER/Contents/Resources"
 WHEELS_DIR="$RESOURCES_DIR/wheels"
 
 cd "$PROJ_ROOT"
+# ninja doesn't prune out/wheels, so a version bump leaves older wheels
+# behind. Clear them first, otherwise stale wheels get bundled alongside the
+# current build and the launcher can resolve an old version.
+rm -f out/wheels/*.whl
 ./ninja wheels
 
 cd "$SCRIPT_DIR"
@@ -46,9 +50,15 @@ if [[ "${INSTALL_TO_APPLICATIONS:-1}" == "1" ]]; then
   done
 
   "$LSREGISTER" -f "$TARGET_APP" >/dev/null 2>&1 || true
+  # Wipe the launcher's resolved venv state so it re-syncs from the freshly
+  # installed bundle. pyproject.toml/previous-version pin the old version: the
+  # launcher syncs from the venv-root pyproject, not the bundle, so leaving a
+  # stale pin keeps the previous version installed even after a version bump.
   rm -rf "$UV_INSTALL_ROOT/.venv"
   rm -f "$UV_INSTALL_ROOT/.sync_complete"
   rm -f "$UV_INSTALL_ROOT/uv.lock"
+  rm -f "$UV_INSTALL_ROOT/pyproject.toml"
+  rm -f "$UV_INSTALL_ROOT/previous-version"
   echo "Installed local fork Anki to: $TARGET_APP"
 else
   echo "Built local fork app bundle at: $APP_LAUNCHER"
