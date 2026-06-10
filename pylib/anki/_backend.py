@@ -196,6 +196,9 @@ class RustBackend(RustBackendGenerated):
     def stop_api_server(self) -> None:
         self._backend.stop_api_server()
 
+    def api_server_file_config_status(self) -> tuple[bool | None, bool]:
+        return self._backend.api_server_file_config_status()
+
 
 class Translations(GeneratedTranslations):
     def __init__(self, backend: ref[RustBackend] | None):

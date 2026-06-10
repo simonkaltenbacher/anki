@@ -117,54 +117,6 @@ def _env_bool(name: str) -> bool | None:
     return None
 
 
-def _api_server_file_config_status_fallback() -> tuple[bool | None, bool]:
-    if is_win:
-        config_dir = os.environ.get("APPDATA")
-        if not config_dir:
-            return (None, False)
-        path = os.path.join(config_dir, "Anki2", "public-api.toml")
-    elif is_mac:
-        path = os.path.expanduser("~/Library/Application Support/Anki2/public-api.toml")
-    else:
-        path = os.path.expanduser("~/.local/share/Anki2/public-api.toml")
-
-    if not os.path.exists(path):
-        return (None, False)
-
-    enabled: bool | None = None
-    configured = False
-
-    # Backwards-compatible fallback when running against an older rsbridge
-    # without api_server_file_config_status().
-    try:
-        import tomllib
-
-        with open(path, "rb") as f:
-            doc = tomllib.load(f)
-        section = doc.get("anki_public_api")
-        if isinstance(section, dict):
-            raw_enabled = section.get("enabled")
-            if isinstance(raw_enabled, bool):
-                enabled = raw_enabled
-            configured = any(
-                section.get(key) is not None
-                for key in (
-                    "host",
-                    "port",
-                    "api_key",
-                    "anki_version",
-                    "auth_disabled",
-                    "allow_non_local",
-                    "allow_loopback_unauthenticated_health_check",
-                )
-            )
-    except Exception:
-        # If parsing fails in fallback mode, file presence still indicates intent.
-        configured = True
-
-    return (enabled, configured)
-
-
 class MainWebView(AnkiWebView):
     def __init__(self, mw: AnkiQt) -> None:
         AnkiWebView.__init__(self, kind=AnkiWebViewKind.MAIN)
@@ -809,28 +761,31 @@ class AnkiQt(QMainWindow):
 
     def _start_api_server(self) -> None:
         env_anki_public_api_enabled = _env_bool("ANKI_PUBLIC_API_ENABLED")
-        if hasattr(self.backend, "api_server_file_config_status"):
+        # Honor an explicit env disable before touching the config file, so a
+        # malformed file can neither override the disable nor abort load below.
+        if env_anki_public_api_enabled is False:
+            return
+
+        # Reading the file config and starting share a try: parsing
+        # public-api.toml happens in the Rust bridge and can raise, and we'd
+        # rather log and skip than abort collection loading.
+        try:
             file_anki_public_api_enabled, file_configured = (
                 self.backend.api_server_file_config_status()
             )
-        else:
-            file_anki_public_api_enabled, file_configured = (
-                _api_server_file_config_status_fallback()
+            api_server_enabled = (
+                env_anki_public_api_enabled
+                if env_anki_public_api_enabled is not None
+                else file_anki_public_api_enabled
             )
-        api_server_enabled = (
-            env_anki_public_api_enabled
-            if env_anki_public_api_enabled is not None
-            else file_anki_public_api_enabled
-        )
-        if api_server_enabled is False and (
-            env_anki_public_api_enabled is not None
-            or file_anki_public_api_enabled is not None
-        ):
-            return
-        if not api_server_enabled and not file_configured:
-            return
+            if api_server_enabled is False and (
+                env_anki_public_api_enabled is not None
+                or file_anki_public_api_enabled is not None
+            ):
+                return
+            if not api_server_enabled and not file_configured:
+                return
 
-        try:
             self.backend.start_api_server(
                 anki_version=anki.buildinfo.version,
             )
