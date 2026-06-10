@@ -28,9 +28,15 @@ sed "s/ANKI_VERSION/$VERSION/g" "$SCRIPT_DIR/pyproject.local.toml" > "$RESOURCES
 touch "$RESOURCES_DIR/local-install-mode"
 
 if [[ "${INSTALL_TO_APPLICATIONS:-1}" == "1" ]]; then
-  TARGET_APP="${ANKI_LOCAL_INSTALL_PATH:-/Applications/Anki.app}"
+  TARGET_APP="${ANKI_LOCAL_INSTALL_PATH:-$HOME/Applications/Anki.app}"
   LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
   UV_INSTALL_ROOT="${ANKI_LAUNCHER_VENV_ROOT:-$HOME/Library/Application Support/AnkiProgramFiles}"
+  for other_app in "/Applications/Anki.app" "$HOME/Applications/Anki.app"; do
+    if [[ "$other_app" != "$TARGET_APP" && -d "$other_app" ]]; then
+      echo "warning: another Anki.app exists at $other_app" >&2
+      echo "warning: remove it if Spotlight/Dock launches the wrong build" >&2
+    fi
+  done
   rm -rf "$TARGET_APP"
   ditto "$APP_LAUNCHER" "$TARGET_APP"
 
