@@ -82,6 +82,12 @@ where
     }
 
     pub async fn serve(mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // rustls 0.23 panics when it cannot pick a process-level CryptoProvider
+        // from crate features, which happens because both aws-lc-rs (pulled in
+        // transitively) and ring are compiled in. Our TLS/SPIFFE stack uses
+        // ring, so install it explicitly. Idempotent: ignores "already set".
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
         let bind_addr = match resolve_bind_addr(&self.config) {
             Ok(bind_addr) => bind_addr,
             Err(err) => {

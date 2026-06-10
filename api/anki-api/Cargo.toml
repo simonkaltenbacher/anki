@@ -18,6 +18,7 @@ futures.workspace = true
 prost.workspace = true
 prost-types = "0.14"
 prost14 = { package = "prost", version = "0.14" }
+rustls = { workspace = true, features = ["ring"] }
 serde.workspace = true
 spiffe.workspace = true
 spiffe-rustls.workspace = true
