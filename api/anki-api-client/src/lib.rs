@@ -82,6 +82,8 @@ pub enum Capability {
     CardsSetDeck,
     DecksListRefs,
     DecksGetIdByName,
+    DecksAdd,
+    DecksRemove,
     NotesGet,
     NotesGetBatch,
     NotesCreate,
@@ -118,6 +120,8 @@ impl Capability {
             "cards.set_deck" => Some(Self::CardsSetDeck),
             "decks.list_refs" => Some(Self::DecksListRefs),
             "decks.get_id_by_name" => Some(Self::DecksGetIdByName),
+            "decks.add" => Some(Self::DecksAdd),
+            "decks.remove" => Some(Self::DecksRemove),
             "notes.get" => Some(Self::NotesGet),
             "notes.get.batch" => Some(Self::NotesGetBatch),
             "notes.create" => Some(Self::NotesCreate),
@@ -382,6 +386,40 @@ impl ApiClient {
             .map_err(Self::map_status)?
             .into_inner();
         Ok(response.deck_id)
+    }
+
+    /// Creates a deck by name (get-or-create). Returns the deck ID and whether
+    /// a new deck was created.
+    pub async fn add_deck(
+        &self,
+        name: impl Into<String>,
+    ) -> Result<v1::AddDeckResponse, ClientError> {
+        let mut client = DecksClient::new(self.channel.clone());
+        let request = self.request(v1::AddDeckRequest { name: name.into() })?;
+        let response = client
+            .add_deck(request)
+            .await
+            .map_err(Self::map_status)?
+            .into_inner();
+        Ok(response)
+    }
+
+    /// Removes a deck and the cards it contains. Refuses to remove a non-empty
+    /// deck unless `force` is set; the response reports whether removal happened
+    /// and the deck's card count.
+    pub async fn remove_deck(
+        &self,
+        deck_id: i64,
+        force: bool,
+    ) -> Result<v1::RemoveDeckResponse, ClientError> {
+        let mut client = DecksClient::new(self.channel.clone());
+        let request = self.request(v1::RemoveDeckRequest { deck_id, force })?;
+        let response = client
+            .remove_deck(request)
+            .await
+            .map_err(Self::map_status)?
+            .into_inner();
+        Ok(response)
     }
 
     /// Moves cards to the target deck and returns the number of cards changed.
@@ -932,9 +970,13 @@ mod tests {
         let caps = parse_capabilities(&[
             "decks.list_refs".to_owned(),
             "decks.get_id_by_name".to_owned(),
+            "decks.add".to_owned(),
+            "decks.remove".to_owned(),
         ]);
         assert!(caps.has(Capability::DecksListRefs));
         assert!(caps.has(Capability::DecksGetIdByName));
+        assert!(caps.has(Capability::DecksAdd));
+        assert!(caps.has(Capability::DecksRemove));
     }
 
     #[test]

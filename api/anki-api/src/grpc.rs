@@ -412,6 +412,8 @@ fn configured_capabilities(config: &ServerConfig) -> Vec<String> {
         "cards.set_deck".to_owned(),
         "decks.list_refs".to_owned(),
         "decks.get_id_by_name".to_owned(),
+        "decks.add".to_owned(),
+        "decks.remove".to_owned(),
         "notes.get".to_owned(),
         "notes.get.batch".to_owned(),
         "notes.create".to_owned(),
@@ -502,6 +504,20 @@ mod tests {
 
         assert!(capabilities.iter().any(|cap| cap == "cards.set_deck"));
         assert!(capabilities.iter().any(|cap| cap == "search.cards"));
+    }
+
+    #[test]
+    fn configured_capabilities_include_deck_lifecycle_operations() {
+        let capabilities = configured_capabilities(&ServerConfig {
+            host: "127.0.0.1".to_owned(),
+            port: 50051,
+            anki_version: None,
+            allow_non_local: false,
+            connection_mode: ServerConnectionMode::Plaintext,
+        });
+
+        assert!(capabilities.iter().any(|cap| cap == "decks.add"));
+        assert!(capabilities.iter().any(|cap| cap == "decks.remove"));
     }
 
     #[test]

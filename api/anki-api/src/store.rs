@@ -9,15 +9,13 @@ use anki_proto::backend::backend_error::Kind as BackendErrorKind;
 use anki_proto::cards::SetDeckRequest;
 use anki_proto::collection::OpChanges;
 use anki_proto::collection::OpChangesWithCount;
-#[cfg(test)]
 use anki_proto::collection::OpChangesWithId;
 use anki_proto::collection::OpenCollectionRequest;
-#[cfg(test)]
 use anki_proto::decks::Deck;
 use anki_proto::decks::DeckId;
+use anki_proto::decks::DeckIds;
 use anki_proto::decks::DeckNames;
 use anki_proto::decks::GetDeckNamesRequest;
-#[cfg(test)]
 use anki_proto::generic::Empty;
 use anki_proto::generic::String as GenericString;
 use anki_proto::notes::AddNoteRequest;
@@ -37,9 +35,11 @@ use anki_proto::notetypes::GetNotetypeChangesPageResponse;
 use anki_proto::notetypes::Notetype;
 use anki_proto::notetypes::NotetypeId;
 use anki_proto::notetypes::NotetypeNames;
+use anki_proto::search::SearchNode;
 use anki_proto::search::SearchRequest;
 use anki_proto::search::SearchResponse;
 use anki_proto::search::SortOrder;
+use anki_proto::search::search_node;
 use prost::Message;
 use thiserror::Error;
 use tonic::Status;
@@ -72,13 +72,17 @@ const METHOD_NOTES_UPDATE: u32 = 5;
 const METHOD_NOTES_GET: u32 = 6;
 const METHOD_NOTES_REMOVE: u32 = 7;
 const METHOD_NOTES_GET_CHANGES_PAGE: u32 = 14;
-#[cfg(test)]
+/// Anki's default deck always has ID 1, even if it was renamed.
+const DEFAULT_DECK_ID: i64 = 1;
+
 const METHOD_DECKS_NEW: u32 = 0;
-#[cfg(test)]
 const METHOD_DECKS_ADD: u32 = 1;
 const METHOD_DECKS_GET_ID_BY_NAME: u32 = 7;
+const METHOD_DECKS_GET: u32 = 8;
 const METHOD_DECKS_GET_NAMES: u32 = 13;
+const METHOD_DECKS_REMOVE: u32 = 16;
 const METHOD_CARDS_SET_DECK: u32 = 3;
+const METHOD_SEARCH_BUILD_STRING: u32 = 0;
 const METHOD_SEARCH_CARDS: u32 = 1;
 const METHOD_SEARCH_NOTES: u32 = 2;
 const METHOD_NOTETYPES_GET_CHANGES_PAGE: u32 = 19;
@@ -218,6 +222,82 @@ impl BackendStore {
         Ok(refs)
     }
 
+    /// Creates a new deck with the given name and returns its ID. Anki creates
+    /// any missing parent decks for hierarchical (`Parent::Child`) names.
+    pub fn add_deck(&self, name: &str) -> Result<i64, Status> {
+        let mut deck: Deck = self.run_method(SERVICE_DECKS, METHOD_DECKS_NEW, Some(Empty {}))?;
+        deck.name = name.to_owned();
+
+        let added: OpChangesWithId =
+            self.run_method(SERVICE_DECKS, METHOD_DECKS_ADD, Some(deck))?;
+        Ok(added.id)
+    }
+
+    /// Removes a deck and its child decks. Refuses to remove a non-empty deck
+    /// unless `force` is set. Returns the deck's card count and whether removal
+    /// happened.
+    ///
+    /// The deck is fetched first, even with `force`: it verifies the deck exists
+    /// (native removal silently no-ops unknown IDs, which would otherwise report
+    /// `removed: true` for a deck that never existed).
+    ///
+    /// A filtered (dynamic) deck inside the target subtree is allowed: native
+    /// removal returns its borrowed cards to their home decks (deleting none of
+    /// them) while deleting the owned cards in the normal decks. The reported
+    /// count comes from native removal, so it reflects the cards actually
+    /// deleted rather than the cards merely resident in the subtree. The
+    /// non-empty guard uses the pre-removal resident count, which for an
+    /// all-normal subtree equals what gets deleted.
+    pub fn remove_deck(&self, deck_id: i64, force: bool) -> Result<(u64, bool), Status> {
+        let deck: Deck = self.run_method(
+            SERVICE_DECKS,
+            METHOD_DECKS_GET,
+            Some(DeckId { did: deck_id }),
+        )?;
+        // The default deck (always id 1) cannot be removed: native removal
+        // clears its cards but resets and keeps the deck, so reporting
+        // `removed: true` would misrepresent what happened.
+        if deck_id == DEFAULT_DECK_ID {
+            return Err(Status::failed_precondition(
+                "the default deck cannot be removed via this API",
+            ));
+        }
+        let card_count = self.count_deck_cards(&deck.name)?;
+        if card_count > 0 && !force {
+            return Ok((card_count, false));
+        }
+        let removed: OpChangesWithCount = self.run_method(
+            SERVICE_DECKS,
+            METHOD_DECKS_REMOVE,
+            Some(DeckIds {
+                dids: vec![deck_id],
+            }),
+        )?;
+        Ok((u64::from(removed.count), true))
+    }
+
+    /// Counts the cards in a deck (including its child decks). Lets Anki build
+    /// the escaped search string from the deck's canonical name, so names
+    /// containing quotes/wildcards are matched literally.
+    fn count_deck_cards(&self, deck_name: &str) -> Result<u64, Status> {
+        let query: GenericString = self.run_method(
+            SERVICE_SEARCH,
+            METHOD_SEARCH_BUILD_STRING,
+            Some(SearchNode {
+                filter: Some(search_node::Filter::Deck(deck_name.to_owned())),
+            }),
+        )?;
+        let response: SearchResponse = self.run_method(
+            SERVICE_SEARCH,
+            METHOD_SEARCH_CARDS,
+            Some(SearchRequest {
+                search: query.val,
+                order: None,
+            }),
+        )?;
+        Ok(response.ids.len() as u64)
+    }
+
     pub fn update_note_fields(&self, mut note: Note, fields: Vec<String>) -> Result<Note, Status> {
         note.fields = fields;
         let note_id = note.id;
@@ -340,16 +420,6 @@ impl BackendStore {
     #[cfg(test)]
     pub(crate) fn create_test_note(&self) -> Result<Note, Status> {
         self.create_test_note_with_fields("api-test-front", Some("api-test-back"))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn create_test_deck(&self, name: &str) -> Result<i64, Status> {
-        let mut deck: Deck = self.run_method(SERVICE_DECKS, METHOD_DECKS_NEW, Some(Empty {}))?;
-        deck.name = name.to_owned();
-
-        let added: OpChangesWithId =
-            self.run_method(SERVICE_DECKS, METHOD_DECKS_ADD, Some(deck))?;
-        Ok(added.id)
     }
 
     #[cfg(test)]

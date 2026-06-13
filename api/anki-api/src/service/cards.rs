@@ -80,7 +80,7 @@ mod tests {
             .search_card_ids_with_query("api-test-front")
             .expect("search cards");
         let deck_id = store
-            .create_test_deck("Card Move Target")
+            .add_deck("Card Move Target")
             .expect("create target deck");
         let api = CardsApi::new(store.clone());
 

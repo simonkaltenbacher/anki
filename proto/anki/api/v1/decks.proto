@@ -2,12 +2,23 @@ syntax = "proto3";
 
 package anki.api.v1;
 
-// Read-only deck lookup APIs.
+// Deck lookup and lifecycle APIs.
 service DecksService {
   // Lists lightweight deck references (ID + name).
   rpc ListDeckRefs(ListDeckRefsRequest) returns (ListDeckRefsResponse);
   // Resolves one exact human deck name to a stable deck ID.
   rpc GetDeckIdByName(GetDeckIdByNameRequest) returns (GetDeckIdByNameResponse);
+  // Creates a deck by name, or returns the existing deck. Idempotent:
+  // `created` is false when the name already resolved to a deck.
+  rpc AddDeck(AddDeckRequest) returns (AddDeckResponse);
+  // Removes a deck and the cards it contains (including child decks). Refuses
+  // to remove a non-empty deck unless `force` is set; the response reports
+  // whether removal happened and the count of cards actually deleted. A
+  // filtered (dynamic) deck in the subtree is allowed: its borrowed cards are
+  // returned to their home decks rather than deleted, and are not counted.
+  // Returns NOT_FOUND when the deck ID does not exist, and FAILED_PRECONDITION
+  // for the default deck (which is reset, not removed).
+  rpc RemoveDeck(RemoveDeckRequest) returns (RemoveDeckResponse);
 }
 
 message ListDeckRefsRequest {}
@@ -27,4 +38,30 @@ message GetDeckIdByNameRequest {
 
 message GetDeckIdByNameResponse {
   int64 deck_id = 1;
+}
+
+message AddDeckRequest {
+  string name = 1;
+}
+
+message AddDeckResponse {
+  int64 deck_id = 1;
+  // False when a deck with this name already existed.
+  bool created = 2;
+}
+
+message RemoveDeckRequest {
+  int64 deck_id = 1;
+  // Remove the deck even if it still contains cards.
+  bool force = 2;
+}
+
+message RemoveDeckResponse {
+  // When `removed` is true, the number of cards actually deleted. When
+  // `removed` is false (refused, non-empty without `force`), the number of
+  // cards currently in the deck.
+  uint64 card_count = 1;
+  // False when removal was refused because the deck was non-empty and `force`
+  // was not set.
+  bool removed = 2;
 }
