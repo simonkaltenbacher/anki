@@ -6,11 +6,19 @@ use anki::services::BackendCollectionService;
 use anki_proto::backend::BackendError;
 use anki_proto::backend::BackendInit;
 use anki_proto::backend::backend_error::Kind as BackendErrorKind;
+use anki_proto::cards::SetDeckRequest;
 use anki_proto::collection::OpChanges;
+use anki_proto::collection::OpChangesWithCount;
+#[cfg(test)]
+use anki_proto::collection::OpChangesWithId;
 use anki_proto::collection::OpenCollectionRequest;
+#[cfg(test)]
+use anki_proto::decks::Deck;
 use anki_proto::decks::DeckId;
 use anki_proto::decks::DeckNames;
 use anki_proto::decks::GetDeckNamesRequest;
+#[cfg(test)]
+use anki_proto::generic::Empty;
 use anki_proto::generic::String as GenericString;
 use anki_proto::notes::AddNoteRequest;
 use anki_proto::notes::AddNoteResponse;
@@ -44,11 +52,13 @@ const SERVICE_NOTETYPES: u32 = 23;
 const SERVICE_NOTES: u32 = 25;
 const SERVICE_SEARCH: u32 = 29;
 const SERVICE_DECKS: u32 = 7;
+const SERVICE_CARDS: u32 = 5;
 
 // Method indices are derived from RPC declaration order in each service proto:
 // - SERVICE_NOTETYPES: `proto/anki/notetypes.proto`
 // - SERVICE_NOTES: `proto/anki/notes.proto`
 // - SERVICE_SEARCH: `proto/anki/search.proto`
+// - SERVICE_CARDS: `proto/anki/cards.proto`
 const METHOD_NOTETYPES_GET: u32 = 6;
 const METHOD_NOTETYPES_GET_NAMES: u32 = 8;
 const METHOD_NOTETYPES_GET_ID_BY_NAME: u32 = 10;
@@ -62,8 +72,14 @@ const METHOD_NOTES_UPDATE: u32 = 5;
 const METHOD_NOTES_GET: u32 = 6;
 const METHOD_NOTES_REMOVE: u32 = 7;
 const METHOD_NOTES_GET_CHANGES_PAGE: u32 = 14;
+#[cfg(test)]
+const METHOD_DECKS_NEW: u32 = 0;
+#[cfg(test)]
+const METHOD_DECKS_ADD: u32 = 1;
 const METHOD_DECKS_GET_ID_BY_NAME: u32 = 7;
 const METHOD_DECKS_GET_NAMES: u32 = 13;
+const METHOD_CARDS_SET_DECK: u32 = 3;
+const METHOD_SEARCH_CARDS: u32 = 1;
 const METHOD_SEARCH_NOTES: u32 = 2;
 const METHOD_NOTETYPES_GET_CHANGES_PAGE: u32 = 19;
 
@@ -105,6 +121,27 @@ impl BackendStore {
             }),
         )?;
         Ok(response.ids)
+    }
+
+    pub fn search_card_ids_with_query(&self, query: &str) -> Result<Vec<i64>, Status> {
+        let response: SearchResponse = self.run_method(
+            SERVICE_SEARCH,
+            METHOD_SEARCH_CARDS,
+            Some(SearchRequest {
+                search: query.to_owned(),
+                order: None,
+            }),
+        )?;
+        Ok(response.ids)
+    }
+
+    pub fn set_card_deck(&self, card_ids: Vec<i64>, deck_id: i64) -> Result<u32, Status> {
+        let response: OpChangesWithCount = self.run_method(
+            SERVICE_CARDS,
+            METHOD_CARDS_SET_DECK,
+            Some(SetDeckRequest { card_ids, deck_id }),
+        )?;
+        Ok(response.count)
     }
 
     pub fn get_notetype(&self, notetype_id: i64) -> Result<Notetype, Status> {
@@ -303,6 +340,16 @@ impl BackendStore {
     #[cfg(test)]
     pub(crate) fn create_test_note(&self) -> Result<Note, Status> {
         self.create_test_note_with_fields("api-test-front", Some("api-test-back"))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn create_test_deck(&self, name: &str) -> Result<i64, Status> {
+        let mut deck: Deck = self.run_method(SERVICE_DECKS, METHOD_DECKS_NEW, Some(Empty {}))?;
+        deck.name = name.to_owned();
+
+        let added: OpChangesWithId =
+            self.run_method(SERVICE_DECKS, METHOD_DECKS_ADD, Some(deck))?;
+        Ok(added.id)
     }
 
     #[cfg(test)]

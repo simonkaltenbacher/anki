@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package anki.api.v1;
+
+// Card-level operations.
+service CardsService {
+  // Moves the given cards to a target deck. Wraps Anki's native
+  // cards.SetDeck operation.
+  rpc SetDeck(SetDeckRequest) returns (SetDeckResponse);
+}
+
+message SetDeckRequest {
+  repeated int64 card_ids = 1;
+  int64 deck_id = 2;
+}
+
+message SetDeckResponse {
+  uint64 changed_count = 1;
+}

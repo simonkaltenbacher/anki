@@ -6,10 +6,12 @@ use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
+use anki_api_proto::anki::api::v1::cards_service_server::CardsServiceServer;
 use anki_api_proto::anki::api::v1::decks_service_server::DecksServiceServer;
 use anki_api_proto::anki::api::v1::health_service_server::HealthServiceServer;
 use anki_api_proto::anki::api::v1::notes_service_server::NotesServiceServer;
 use anki_api_proto::anki::api::v1::notetypes_service_server::NotetypesServiceServer;
+use anki_api_proto::anki::api::v1::search_service_server::SearchServiceServer;
 use anki_api_proto::anki::api::v1::system_service_server::SystemServiceServer;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
@@ -35,10 +37,12 @@ use crate::auth::ApiKeyAuthenticator;
 use crate::config::ServerConfig;
 use crate::config::ServerConnectionMode;
 use crate::config::TlsAuthMode;
+use crate::service::cards::CardsApi;
 use crate::service::decks::DecksApi;
 use crate::service::health::HealthApi;
 use crate::service::notes::NotesApi;
 use crate::service::notetypes::NotetypesApi;
+use crate::service::search::SearchApi;
 use crate::service::system::SystemApi;
 use crate::store;
 use crate::transport;
@@ -127,6 +131,16 @@ where
         let decks_api = DecksApi::new(self.store.clone());
         let decks_service = with_auth(DecksServiceServer::new(decks_api), Arc::clone(&auth), false);
 
+        let cards_api = CardsApi::new(self.store.clone());
+        let cards_service = with_auth(CardsServiceServer::new(cards_api), Arc::clone(&auth), false);
+
+        let search_api = SearchApi::new(self.store.clone());
+        let search_service = with_auth(
+            SearchServiceServer::new(search_api),
+            Arc::clone(&auth),
+            false,
+        );
+
         let notetypes_api = NotetypesApi::new(self.store.clone());
         let notetypes_service = with_auth(
             NotetypesServiceServer::new(notetypes_api),
@@ -143,6 +157,8 @@ where
                 .add_service(health_service)
                 .add_service(system_service)
                 .add_service(decks_service)
+                .add_service(cards_service)
+                .add_service(search_service)
                 .add_service(notes_service)
                 .add_service(notetypes_service)
         };
@@ -393,6 +409,7 @@ fn configured_capabilities(config: &ServerConfig) -> Vec<String> {
     let mut capabilities = vec![
         "health.check".to_owned(),
         "system.server_info".to_owned(),
+        "cards.set_deck".to_owned(),
         "decks.list_refs".to_owned(),
         "decks.get_id_by_name".to_owned(),
         "notes.get".to_owned(),
@@ -418,6 +435,7 @@ fn configured_capabilities(config: &ServerConfig) -> Vec<String> {
         "notetypes.update_css.batch".to_owned(),
         "notetypes.changes".to_owned(),
         "notetypes.count".to_owned(),
+        "search.cards".to_owned(),
     ];
     if matches!(
         config.connection_mode,
@@ -470,6 +488,20 @@ mod tests {
         });
 
         assert!(capabilities.iter().any(|cap| cap == "notes.create.batch"));
+    }
+
+    #[test]
+    fn configured_capabilities_include_card_and_search_operations() {
+        let capabilities = configured_capabilities(&ServerConfig {
+            host: "127.0.0.1".to_owned(),
+            port: 50051,
+            anki_version: None,
+            allow_non_local: false,
+            connection_mode: ServerConnectionMode::Plaintext,
+        });
+
+        assert!(capabilities.iter().any(|cap| cap == "cards.set_deck"));
+        assert!(capabilities.iter().any(|cap| cap == "search.cards"));
     }
 
     #[test]

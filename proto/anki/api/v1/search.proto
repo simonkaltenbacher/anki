@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package anki.api.v1;
+
+// Search APIs that resolve Anki queries to entity IDs.
+service SearchService {
+  // Resolves an Anki search query to matching card IDs.
+  rpc SearchCards(SearchCardsRequest) returns (SearchCardsResponse);
+}
+
+message SearchCardsRequest {
+  string query = 1;
+}
+
+message SearchCardsResponse {
+  repeated int64 card_ids = 1;
+}

@@ -10,6 +10,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         proto_root.join("anki/api/v1/decks.proto"),
         proto_root.join("anki/api/v1/notes.proto"),
         proto_root.join("anki/api/v1/notetypes.proto"),
+        proto_root.join("anki/api/v1/cards.proto"),
+        proto_root.join("anki/api/v1/search.proto"),
     ];
 
     for file in &files {

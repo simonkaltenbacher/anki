@@ -44,6 +44,14 @@ pub type HealthClient = v1::health_service_client::HealthServiceClient<Channel>;
 ///
 /// Prefer [`ApiClient`] for auth injection, capability bootstrap, and typed errors.
 pub type DecksClient = v1::decks_service_client::DecksServiceClient<Channel>;
+/// Raw tonic client for `CardsService`.
+///
+/// Prefer [`ApiClient`] for auth injection, capability bootstrap, and typed errors.
+pub type CardsClient = v1::cards_service_client::CardsServiceClient<Channel>;
+/// Raw tonic client for `SearchService`.
+///
+/// Prefer [`ApiClient`] for auth injection, capability bootstrap, and typed errors.
+pub type SearchClient = v1::search_service_client::SearchServiceClient<Channel>;
 /// Raw tonic client for `SystemService`.
 ///
 /// Prefer [`ApiClient`] for auth injection, capability bootstrap, and typed errors.
@@ -71,6 +79,7 @@ pub mod error_codes {
 pub enum Capability {
     HealthCheck,
     SystemServerInfo,
+    CardsSetDeck,
     DecksListRefs,
     DecksGetIdByName,
     NotesGet,
@@ -96,6 +105,7 @@ pub enum Capability {
     NotetypesUpdateCssBatch,
     NotetypesChanges,
     NotetypesCount,
+    SearchCards,
     AuthApiKey,
     AuthSpiffeMtls,
 }
@@ -105,6 +115,7 @@ impl Capability {
         match value {
             "health.check" => Some(Self::HealthCheck),
             "system.server_info" => Some(Self::SystemServerInfo),
+            "cards.set_deck" => Some(Self::CardsSetDeck),
             "decks.list_refs" => Some(Self::DecksListRefs),
             "decks.get_id_by_name" => Some(Self::DecksGetIdByName),
             "notes.get" => Some(Self::NotesGet),
@@ -130,6 +141,7 @@ impl Capability {
             "notetypes.update_css.batch" => Some(Self::NotetypesUpdateCssBatch),
             "notetypes.changes" => Some(Self::NotetypesChanges),
             "notetypes.count" => Some(Self::NotetypesCount),
+            "search.cards" => Some(Self::SearchCards),
             "auth.api_key" => Some(Self::AuthApiKey),
             "auth.spiffe_mtls" => Some(Self::AuthSpiffeMtls),
             _ => None,
@@ -370,6 +382,36 @@ impl ApiClient {
             .map_err(Self::map_status)?
             .into_inner();
         Ok(response.deck_id)
+    }
+
+    /// Moves cards to the target deck and returns the number of cards changed.
+    pub async fn set_card_deck(
+        &self,
+        card_ids: Vec<i64>,
+        deck_id: i64,
+    ) -> Result<u64, ClientError> {
+        let mut client = CardsClient::new(self.channel.clone());
+        let request = self.request(v1::SetDeckRequest { card_ids, deck_id })?;
+        let response = client
+            .set_deck(request)
+            .await
+            .map_err(Self::map_status)?
+            .into_inner();
+        Ok(response.changed_count)
+    }
+
+    /// Resolves an Anki search query to matching card IDs.
+    pub async fn search_card_ids(&self, query: impl Into<String>) -> Result<Vec<i64>, ClientError> {
+        let mut client = SearchClient::new(self.channel.clone());
+        let request = self.request(v1::SearchCardsRequest {
+            query: query.into(),
+        })?;
+        let response = client
+            .search_cards(request)
+            .await
+            .map_err(Self::map_status)?
+            .into_inner();
+        Ok(response.card_ids)
     }
 
     /// Returns parsed typed capabilities advertised by server.
@@ -893,6 +935,13 @@ mod tests {
         ]);
         assert!(caps.has(Capability::DecksListRefs));
         assert!(caps.has(Capability::DecksGetIdByName));
+    }
+
+    #[test]
+    fn parses_card_and_search_capabilities() {
+        let caps = parse_capabilities(&["cards.set_deck".to_owned(), "search.cards".to_owned()]);
+        assert!(caps.has(Capability::CardsSetDeck));
+        assert!(caps.has(Capability::SearchCards));
     }
 
     #[test]
